@@ -23,12 +23,15 @@ conda activate cosyvoice2
 1. 先clone cosyvoice项目
 ````
 git clone https://github.com/FunAudioLLM/CosyVoice.git
+cd CosyVoice
+git submodule update --init --recursive
 ````
 
-2. 在cosyvoice项目路径下再clone本项目
+2. 在cosyvoice项目路径下再clone本项目，或添加本项目为子模块
 ```bash
-cd CosyVoice
 git clone https://github.com/qi-hua/async_cosyvoice.git
+or
+git submodule add https://github.com/qi-hua/async_cosyvoice.git async_cosyvoice
 ```
 
 3. 在async_cosyvoice目录下安装所有依赖
@@ -52,6 +55,7 @@ cp async_cosyvoice/CosyVoice2-0.5B/* pretrained_models/CosyVoice2-0.5B/
 6. 在config.py文件中设置vllm的AsyncEngineArgs参数、SamplingParams参数
 ```python
 ENGINE_ARGS = {
+    # 根据实际情况设置 
     "gpu_memory_utilization": 0.4,
     "max_num_batched_tokens": 1024,
     "max_model_len": 1024,
@@ -77,12 +81,40 @@ python client.py
 ```
 
 ---
+### 潜在问题：
+- 使用的vllm中的sampler替代了cosyvoice的get_sampler_id, 可能会导致不稳定的情况，根据实际效果判断是否采用原来的get_sampler_id
+- 使用 steam=True 时，flow部分的计算会降低推理速度，建议使用 steam=False
+- 未进行并发测试，如有并发问题，欢迎反馈优化
+
+---
+### 测试效果
+
+- 测试代码: [speed_test.ipynb](speed_test.ipynb)
+- 测试环境: Intel i5-12400 CPU, 32GB RAM, 1x NVIDIA GeForce RTX 4070
+- 运行环境: Ubuntu 24.04.1 LTS, cuda 12.4, python 3.10.16
+- 测试说明: 单任务执行的数据（非并发测试），tts_text为中文，长度50
+- 测试结果: 建议使用 inference_zero_shot_by_spk_id 的非流式推理，流式推理会严重降低速度。流式推理时首包延迟700mm左右
+
+| 推理函数                          | stream | 默认情况下耗时 | 默认情况下rtf | vllm加速下耗时 | vllm加速下rtf |
+|-------------------------------|--------|---------|----------|-----------|------------|
+| inference_sft                 | False  | 3.30    | 0.26     | 1.75      | 0.15       |
+| inference_sft                 | True   | 5.08    | -        | 1.75      | 0.15       |
+| inference_zero_shot           | False  | 3.45    | 0.27     | 1.89      | 0.15       |
+| inference_zero_shot           | True   | 5.17    | -        | 3.23      | -          |
+| inference_instruct2           | False  | 3.12    | 0.26     | 1.71      | 0.12       |
+| inference_instruct2           | True   | 4.11    | -        | 3.17      | -          |
+| inference_zero_shot_by_spk_id | False  | -       | -        | 1.21      | 0.13       |
+| inference_zero_shot_by_spk_id | True   | -       | -        | 2.68      | -          |
+| inference_instruct2_by_spk_id | False  | -       | -        | 1.58      | 0.14       |
+| inference_instruct2_by_spk_id | True   | -       | -        | 2.84      | -          |
+
+---
 ### 说明：
 
 1. 目前使用的 vllm 最新版本，并开启了 VLLM_USE_V1 = '1'
 2. 目前cuda环境是12.4, 部分依赖文件使用的较新版本 vllm==0.7.3 torch==2.5.1 onnxruntime-gpu==1.19.0
 3. 如果使用load_trt，需手动安装依赖tensorrt
-4. 如在其他地方使用，需要参照
+4. 如在其他地方使用，需要参照async_grpc中的server.py设置sys.path，以正确的引用 cosyvoice、async_cosyvoice
 ```python
 import os
 import sys
@@ -90,3 +122,17 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f'{ROOT_DIR}/../..')
 sys.path.append(f'{ROOT_DIR}/../../third_party/Matcha-TTS')
 ```
+5. 第一次运行时，如果使用的WeTextProcessing则先运行下面的代码，生成缓存。代码frontend中overwrite_cache=False避免了后续运行时重复生成。
+```python
+from tn.chinese.normalizer import Normalizer as ZhNormalizer
+zh_tn_model = ZhNormalizer(overwrite_cache=True)
+```
+
+---
+### spk2info说明
+
+spk2info.pt文件中保存了 prompt_text及其token、embedding数据，可以用于 sft、inference_zero_shot_by_spk_id、inference_instruct2_by_spk_id，不用传递参考prompt_text、及音频数据，直接传递spk_id即可。
+
+通过 frontend.**generate_spk_info** 函数生成新的 spk2info，需要传入的参数为：
+
+spk_id: str, prompt_text: str, prompt_speech_16k: torch.Tensor, resample_rate:int=24000, name: str=None。
