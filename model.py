@@ -36,6 +36,8 @@ from vllm.outputs import RequestOutput
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 
 from vllm import ModelRegistry
+from async_cosyvoice.config import ENGINE_ARGS, SAMPLING_PARAMS
+
 from async_cosyvoice.vllm_use_cosyvoice2_model import CosyVoice2Model as CosyVoice2LLM
 ModelRegistry.register_model("CosyVoice2Model", CosyVoice2LLM)
 
@@ -53,21 +55,10 @@ class CosyVoice2Model:
          fp16: bool,
          mix_ratio: List[int] = None,
     ):
-        # model_dir = "/home/qihua/github/FunAudioLLM-APP/cosyvoice/pretrained_models/CosyVoice2-0.5B"
         # vllm engine 的参数配置
-        # TODO： 配置文件写入新的 cosyvoice.yaml 文件中
         engine_args = AsyncEngineArgs(
             model=model_dir,
-            block_size=16,
-            swap_space=0,
-            # enforce_eager=True,
-            gpu_memory_utilization=0.4,
-            max_num_batched_tokens=1024,
-            # max_model_len=4096,
-            max_model_len=1024,
-            max_num_seqs=256,
-            disable_log_requests=True,
-            disable_log_stats=True,
+            **ENGINE_ARGS,
         )
         self.llm_engine: AsyncLLMEngine = AsyncLLMEngine.from_engine_args(engine_args)
 
@@ -140,18 +131,8 @@ class CosyVoice2Model:
         # print('prompt_token_ids:', prompt_token_ids)
         # TODO: 增加上下文控制，取消请求时
         sampling_params = SamplingParams(
-            temperature=0.9,  # 不能低于0.8, 否则会生成非常多的空音频，或者无法正常生成语音Token
-            top_p=0.95,        # 不能低于0.8, 否则会生成非常多的空音频，或者无法正常生成语音Token
-            top_k=25,
-            # min_tokens=80,       # 不支持设置最小的tokens数量设置，开启后直接崩溃
-            # presence_penalty = 1.0,    # 不支持设置
-            # frequency_penalty = 0.0,   # 不支持设置
-            max_tokens=1024,
-            detokenize=False,
+            **SAMPLING_PARAMS,
             stop_token_ids=stop_token_ids or [6561],
-            # stop_token_ids=[6561, 6563],   # for stream
-            ignore_eos=False,
-            output_kind=RequestOutputKind.DELTA
         )
         async for output in self.llm_engine.generate(
                 {
@@ -272,8 +253,9 @@ class CosyVoice2Model:
         task = asyncio.create_task(self.llm_job(text, prompt_text, llm_prompt_speech_token, llm_embedding, this_uuid))
         if stream is True:
             token_offset = 0
+            await asyncio.sleep(0.1)
             while True:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
                 if len(self.tts_speech_token_dict[this_uuid]) - token_offset >= self.token_hop_len + self.flow.pre_lookahead_len:
                     this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid][:token_offset + self.token_hop_len + self.flow.pre_lookahead_len]).unsqueeze(dim=0)
                     # this_tts_speech = await asyncio.to_thread(

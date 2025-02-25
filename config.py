@@ -24,7 +24,6 @@ SAMPLING_PARAMS = {
     # "frequency_penalty": 0.0,   # 不支持设置
     "max_tokens": 1024,
     "detokenize": False,
-    "stop_token_ids": [6561, 6563],
     "ignore_eos": False,
     "output_kind": 1  # vllm.sampling_params.RequestOutputKind.DELTA  # 设置为DELTA，如调整该参数，请同时调整llm_inference的处理代码
 }
