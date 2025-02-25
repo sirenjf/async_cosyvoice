@@ -13,7 +13,7 @@ ENGINE_ARGS = {
     "disable_log_stats": True,
 }
 
-# from vllm.sampling_params import RequestOutputKind, SamplingParams
+from vllm.sampling_params import RequestOutputKind
 # SamplingParams
 SAMPLING_PARAMS = {
     "temperature": 0.9,  # 不能低于0.8, 否则会生成非常多的空音频，或者无法正常生成语音Token
@@ -25,5 +25,5 @@ SAMPLING_PARAMS = {
     "max_tokens": 1024,
     "detokenize": False,
     "ignore_eos": False,
-    "output_kind": 1  # vllm.sampling_params.RequestOutputKind.DELTA  # 设置为DELTA，如调整该参数，请同时调整llm_inference的处理代码
+    "output_kind": RequestOutputKind.DELTA  # 设置为DELTA，如调整该参数，请同时调整llm_inference的处理代码
 }
