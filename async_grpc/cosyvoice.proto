@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package cosyvoice;
+option go_package = "protos/";
+
+service CosyVoice{
+  rpc Inference(Request) returns (stream Response) {}
+}
+
+message Request {
+  // 新增公共参数
+  bool stream = 1;          // 流式输出控制
+  float speed = 2;          // 速度控制
+  bool text_frontend = 3;   // 是否启用文本前端处理
+
+  // oneof RequestPayload {
+  oneof request_type {
+    sftRequest sft_request = 4;
+    zeroshotRequest zero_shot_request = 5;
+    crosslingualRequest cross_lingual_request = 6;
+    instruct2Request instruct2_request = 7;
+    instruct2BySpkIdRequest instruct2_by_spk_id_request = 8;
+    zeroshotBySpkIdRequest zero_shot_by_spk_id_request = 9;
+  }
+}
+
+message sftRequest{
+  string tts_text = 1;
+  string spk_id = 2;
+}
+
+message zeroshotRequest{
+  string tts_text = 1;
+  string prompt_text = 2;
+  bytes prompt_audio = 3;
+}
+
+message crosslingualRequest{
+  string tts_text = 1;
+  bytes prompt_audio = 2;
+}
+
+message instruct2Request{
+  string tts_text = 1;
+  string instruct_text = 2;
+  bytes prompt_audio = 3;
+}
+
+message instructRequest{
+  string tts_text = 1;
+  string instruct_text = 2;
+  string spk_id = 3;
+}
+
+message instruct2BySpkIdRequest{
+  string tts_text = 1;
+  string instruct_text = 2;
+  string spk_id = 3;
+}
+
+message zeroshotBySpkIdRequest{
+  string tts_text = 1;
+  string spk_id = 2;
+}
+
+message Response{
+  bytes tts_audio = 1;
+}
