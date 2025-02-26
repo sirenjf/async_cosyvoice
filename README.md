@@ -7,8 +7,9 @@
 
 该项目是为了加速cosyvoice2的推理，仅支持linux系统，依赖vllm。
 1. **使用vllm加速llm部分的推理**
-2. flow部分的推理**未优化**，流式或并发时会隐形llm部分的推理，需大佬优化
-3. grpc-async服务端
+2. flow部分的推理**未优化**，无法批次处理，期待大佬来优化优化
+3. 单任务流式情况下，首包延迟在300-350ms左右，但耗时较非流式有所增加
+4. grpc-async服务端
 
 ---
 ### 环境准备(使用python=3.10.16)
@@ -82,38 +83,40 @@ python client.py
 
 ---
 ### 潜在问题：
-- 使用的vllm中的sampler替代了cosyvoice的get_sampler_id, 可能会导致不稳定的情况，根据实际效果判断是否采用原来的get_sampler_id
-- 使用 steam=True 时，flow部分的计算会降低推理速度，建议使用 steam=False
-- 未进行并发测试，如有并发问题，欢迎反馈优化
+- 使用的vllm中的sampler替代了cosyvoice的get_sampler_id, 可能会导致不稳定的情况，目前设置top_p=1的情况下，暂无特殊情况。
+- 使用 steam=True 时，flow部分的多次计算会降低整体推理速度。建议使用对字符进行切片后，使用 steam=False。
+- 并发时因为flow部分的推理不能批处理，效率较低，期待优化。
 
 ---
 ### 测试效果
 
 - 测试代码: [speed_test.ipynb](speed_test.ipynb)
-- 测试环境: Intel i5-12400 CPU, 32GB RAM, 1x NVIDIA GeForce RTX 4070
+- 测试环境: Intel i5-12400 CPU, 48GB RAM, 1x NVIDIA GeForce RTX 4070
 - 运行环境: Ubuntu 24.04.1 LTS, cuda 12.4, python 3.10.16
-- 测试说明: 单任务执行的数据（非并发测试），tts_text为中文，长度50
-- 测试结果: 建议使用 inference_zero_shot_by_spk_id 的非流式推理，流式推理会严重降低速度。流式推理时首包延迟700mm左右
-
-| 推理函数                          | stream | 默认情况下耗时 | 默认情况下rtf | vllm加速下耗时 | vllm加速下rtf |
-|-------------------------------|--------|---------|----------|-----------|------------|
-| inference_sft                 | False  | 3.30    | 0.26     | 1.75      | 0.15       |
-| inference_sft                 | True   | 5.08    | -        | 1.75      | 0.15       |
-| inference_zero_shot           | False  | 3.45    | 0.27     | 1.89      | 0.15       |
-| inference_zero_shot           | True   | 5.17    | -        | 3.23      | -          |
-| inference_instruct2           | False  | 3.12    | 0.26     | 1.71      | 0.12       |
-| inference_instruct2           | True   | 4.11    | -        | 3.17      | -          |
-| inference_zero_shot_by_spk_id | False  | -       | -        | 1.21      | 0.13       |
-| inference_zero_shot_by_spk_id | True   | -       | -        | 2.68      | -          |
-| inference_instruct2_by_spk_id | False  | -       | -        | 1.58      | 0.14       |
-| inference_instruct2_by_spk_id | True   | -       | -        | 2.84      | -          |
+- 测试说明: tts_text为中文，使用 **jit 和 trt**
+- 测试结果: 具体数据及过程详见[speed_test.ipynb](speed_test.ipynb)
+  - 进行非流式推理时，运行单任务推理rtf能从原来的0.25-0.30，经过vllm加速后能达到0.1-0.15；
+  - 加速后进行流式推理时，每15个语音token就生成音频返回的话，首包延迟能在300-350ms之间；
+  - 流式推理会严重降低速度,建议使用 inference_zero_shot_by_spk_id 的非流式推理。
 
 ---
 ### 说明：
 
 1. 目前使用的 vllm 最新版本，并开启了 VLLM_USE_V1 = '1'
 2. 目前cuda环境是12.4, 部分依赖文件使用的较新版本 vllm==0.7.3 torch==2.5.1 onnxruntime-gpu==1.19.0
-3. 如果使用load_trt，需手动安装依赖tensorrt
+3. 如果使用load_trt，需手动安装依赖tensorrt，load_trt对 flow 中的decoder有一定的帮助，但显存占用较大(默认启动会占用 4.7G 显存，应该可以设置减少)。
+   安装方式： 
+```bash
+pip install tensorrt-cu12==10.0.1 tensorrt-cu12-bindings==10.0.1 tensorrt-cu12-libs==10.0.1
+
+# 启动时会看到如下信息
+[TRT] [I] Loaded engine size: 158 MiB
+[TRT] [I] [MS] Running engine with multi stream info
+[TRT] [I] [MS] Number of aux streams is 1
+[TRT] [I] [MS] Number of total worker streams is 2
+[TRT] [I] [MS] The main stream provided by execute/enqueue calls is the first worker stream
+[TRT] [I] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +4545, now: CPU 0, GPU 4681 (MiB)
+```
 4. 如在其他地方使用，需要参照async_grpc中的server.py设置sys.path，以正确的引用 cosyvoice、async_cosyvoice
 ```python
 import os

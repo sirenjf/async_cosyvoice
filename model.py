@@ -21,6 +21,7 @@ import time
 from torch.nn import functional as F
 from contextlib import nullcontext
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from cosyvoice.flow.flow import CausalMaskedDiffWithXvec
 from cosyvoice.hifigan.generator import HiFTGenerator
@@ -61,7 +62,7 @@ class CosyVoice2Model:
             **ENGINE_ARGS,
         )
         self.llm_engine: AsyncLLMEngine = AsyncLLMEngine.from_engine_args(engine_args)
-
+        self.thread_executor = ThreadPoolExecutor(max_workers=10)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.flow = flow
         self.hift = hift
@@ -69,7 +70,8 @@ class CosyVoice2Model:
         self.flow.fp16 = fp16
         if self.fp16 is True:
             self.flow.half()
-        self.token_hop_len = 2 * self.flow.input_frame_rate
+        # self.token_hop_len = 2 * self.flow.input_frame_rate
+        self.token_hop_len = 15
         # here we fix flow encoder/decoder decoding_chunk_size, in the future we will send it as arguments, or use cache
         self.flow.encoder.static_chunk_size = 2 * self.flow.input_frame_rate
         self.flow.decoder.estimator.static_chunk_size = 2 * self.flow.input_frame_rate * self.flow.token_mel_ratio
@@ -123,6 +125,15 @@ class CosyVoice2Model:
         if self.flow.decoder.estimator_engine is None:
             raise ValueError('failed to load trt {}'.format(flow_decoder_estimator_model))
         self.flow.decoder.estimator = self.flow.decoder.estimator_engine.create_execution_context()
+        # TODO: 如何限制内存
+        # 启动后会占用较多显存
+        # [TRT] [I] Loaded engine size: 158 MiB
+        # [TRT] [I] [MS] Running engine with multi stream info
+        # [TRT] [I] [MS] Number of aux streams is 1
+        # [TRT] [I] [MS] Number of total worker streams is 2
+        # [TRT] [I] [MS] The main stream provided by execute/enqueue calls is the first worker stream
+        # [TRT] [I] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +4545, now: CPU 0, GPU 4681 (MiB)
+        # 该代码无法正常执行 self.flow.decoder.estimator.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)   # 1GB
 
     async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None):
         assert isinstance(prompt_token_ids, list) , "prompt_token_ids should be List[int]"
@@ -203,6 +214,9 @@ class CosyVoice2Model:
             self.tts_speech_token_dict[uuid] = self.tts_speech_token_dict[uuid][:-1]
 
         self.llm_end_dict[uuid] = True
+        logging.info('llm job done')
+        # 记录 prompt_token_ids self.tts_speech_token_dict[uuid] 数据用于后续的训练，与flow推理测试
+
 
     def token2wav(self, token, prompt_token, prompt_feat, embedding, uuid, token_offset, finalize=False, speed=1.0):
         tts_mel, _ = self.flow.inference(token=token.to(self.device),
@@ -254,57 +268,59 @@ class CosyVoice2Model:
         if stream is True:
             token_offset = 0
             await asyncio.sleep(0.1)
+            loop = asyncio.get_event_loop()
             while True:
-                await asyncio.sleep(0.05)
                 if len(self.tts_speech_token_dict[this_uuid]) - token_offset >= self.token_hop_len + self.flow.pre_lookahead_len:
                     this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid][:token_offset + self.token_hop_len + self.flow.pre_lookahead_len]).unsqueeze(dim=0)
-                    # this_tts_speech = await asyncio.to_thread(
-                    #     self.token2wav,
-                    #          token=this_tts_speech_token,
-                    #          prompt_token=flow_prompt_speech_token,
-                    #          prompt_feat=prompt_speech_feat,
-                    #          embedding=flow_embedding,
-                    #          uuid=this_uuid,
-                    #          token_offset=token_offset,
-                    #          finalize=False
-                    # )
-                    this_tts_speech = self.token2wav(
-                             token=this_tts_speech_token,
-                             prompt_token=flow_prompt_speech_token,
-                             prompt_feat=prompt_speech_feat,
-                             embedding=flow_embedding,
-                             uuid=this_uuid,
-                             token_offset=token_offset,
-                             finalize=False
+                    this_tts_speech = await loop.run_in_executor(self.thread_executor,
+                        self.token2wav,
+                        this_tts_speech_token,
+                            flow_prompt_speech_token,
+                            prompt_speech_feat,
+                            flow_embedding,
+                            this_uuid,
+                            token_offset,
+                            False
                     )
                     token_offset += self.token_hop_len
                     yield {'tts_speech': this_tts_speech.cpu()}
-                if (self.llm_end_dict[this_uuid] is True and
-                        len(self.tts_speech_token_dict[this_uuid]) - token_offset < self.token_hop_len + self.flow.pre_lookahead_len):
-                    break
+                if self.llm_end_dict[this_uuid] is True:
+                    if len(self.tts_speech_token_dict[this_uuid]) - token_offset < self.token_hop_len + self.flow.pre_lookahead_len:
+                        break
+                    else:
+                        continue
+                else:
+                    await asyncio.sleep(0.05)
             await task
             # deal with remain tokens, make sure inference remain token len equals token_hop_len when cache_speech is not None
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
-            this_tts_speech = self.token2wav(token=this_tts_speech_token,
-                                             prompt_token=flow_prompt_speech_token,
-                                             prompt_feat=prompt_speech_feat,
-                                             embedding=flow_embedding,
-                                             uuid=this_uuid,
-                                             token_offset=token_offset,
-                                             finalize=True)
+            this_tts_speech = await loop.run_in_executor(self.thread_executor,
+                                                         self.token2wav,
+                                                         this_tts_speech_token,
+                                                         flow_prompt_speech_token,
+                                                         prompt_speech_feat,
+                                                         flow_embedding,
+                                                         this_uuid,
+                                                         token_offset,
+                                                         False,
+                                                         )
             yield {'tts_speech': this_tts_speech.cpu()}
         else:
             # deal with all tokens
             await task
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
-            this_tts_speech = self.token2wav(token=this_tts_speech_token,
-                                             prompt_token=flow_prompt_speech_token,
-                                             prompt_feat=prompt_speech_feat,
-                                             embedding=flow_embedding,
-                                             uuid=this_uuid,
-                                             token_offset=0,
-                                             finalize=True,
-                                             speed=speed)
+            loop = asyncio.get_event_loop()
+            this_tts_speech = await loop.run_in_executor(self.thread_executor,
+                                                         self.token2wav,
+                                                         this_tts_speech_token,
+                                                         flow_prompt_speech_token,
+                                                         prompt_speech_feat,
+                                                         flow_embedding,
+                                                         this_uuid,
+                                                         0,
+                                                         True,
+                                                         speed,
+                                                         )
             yield {'tts_speech': this_tts_speech.cpu()}
         async with self.lock:
             self.tts_speech_token_dict.pop(this_uuid)
