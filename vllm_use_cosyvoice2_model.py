@@ -153,7 +153,7 @@ class CosyVoice2Model(nn.Module):
         kwargs.
         """
         # 创建掩码，标记哪些 token_id 属于音频 Token
-        mask = input_ids <= self.speech_token_size
+        mask = input_ids < self.speech_token_size
 
         # 获取 input_ids 的原始形状
         input_shape = input_ids.shape
