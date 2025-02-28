@@ -32,9 +32,7 @@ from cosyvoice.utils.file_utils import convert_onnx_to_trt
 os.environ["VLLM_USE_V1"] = '1'
 from vllm import  AsyncLLMEngine
 from vllm.engine.arg_utils import AsyncEngineArgs
-from vllm.inputs import PromptType
-from vllm.outputs import RequestOutput
-from vllm.sampling_params import RequestOutputKind, SamplingParams
+from vllm.sampling_params import SamplingParams
 
 from vllm import ModelRegistry
 from async_cosyvoice.config import ENGINE_ARGS, SAMPLING_PARAMS
@@ -135,16 +133,16 @@ class CosyVoice2Model:
         # [TRT] [I] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +4545, now: CPU 0, GPU 4681 (MiB)
         # 该代码无法正常执行 self.flow.decoder.estimator.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)   # 1GB
 
-    async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None):
+    async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None, max_tokens=None):
         assert isinstance(prompt_token_ids, list) , "prompt_token_ids should be List[int]"
         invalid = next((i for i, x in enumerate(prompt_token_ids) if not isinstance(x, int)), None)
         assert invalid is None, f"Error in prompt_token_ids, Non-int element at index {invalid}: {prompt_token_ids[invalid]}"
         # print('prompt_token_ids:', prompt_token_ids)
         # TODO: 增加上下文控制，取消请求时
-        sampling_params = SamplingParams(
-            **SAMPLING_PARAMS,
-            stop_token_ids=stop_token_ids or [6561],
-        )
+        sampling_params = SamplingParams(**SAMPLING_PARAMS)
+        sampling_params.stop_token_ids = stop_token_ids or [6561]
+        if max_tokens:
+            sampling_params.max_tokens = max_tokens
         async for output in self.llm_engine.generate(
                 {
                     "prompt_token_ids": prompt_token_ids,
@@ -152,9 +150,6 @@ class CosyVoice2Model:
                 sampling_params=sampling_params,
                 request_id=request_id or f"{time.time()}",
         ):
-            # print(len(output.outputs[0].token_ids), '---', output.outputs[0].token_ids)
-            # yield output.outputs[0].token_ids[-1]
-            # print(output.outputs[0])
             yield output.outputs[0]
 
 
@@ -209,12 +204,19 @@ class CosyVoice2Model:
             text = tensor_to_list(text + torch.tensor(6564))
             prompt_token_ids = [self.sos_eos_token_id] + prompt_text + text + \
                                [self.task_token_id] + llm_prompt_speech_token
-            async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561]):
+            max_tokens = len(text) * 20
+            async for output in self.llm_inference(
+                    prompt_token_ids,
+                    request_id=uuid,
+                    stop_token_ids=[6561],
+                    max_tokens=max_tokens,
+            ):
                 self.tts_speech_token_dict[uuid].extend(output.token_ids)
             self.tts_speech_token_dict[uuid] = self.tts_speech_token_dict[uuid][:-1]
 
         self.llm_end_dict[uuid] = True
         logging.info('llm job done')
+        logging.debug(f'prompt_token_ids: {self.tts_speech_token_dict[uuid]}')
         # 记录 prompt_token_ids self.tts_speech_token_dict[uuid] 数据用于后续的训练，与flow推理测试
 
 
