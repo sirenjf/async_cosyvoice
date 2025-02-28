@@ -17,8 +17,8 @@ import asyncio  # 新增异步支持
 
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(f'{ROOT_DIR}/../..')
-sys.path.append(f'{ROOT_DIR}/../../third_party/Matcha-TTS')
+sys.path.append(f'{ROOT_DIR}/../../..')
+sys.path.append(f'{ROOT_DIR}/../../../third_party/Matcha-TTS')
 import logging
 import argparse
 import torchaudio
@@ -27,8 +27,6 @@ import cosyvoice_pb2_grpc
 import grpc
 from grpc import aio  # 使用异步grpc模块
 from cosyvoice.utils.file_utils import load_wav
-
-# from async_cosyvoice.utils import convert_audio_tensor_to_bytes, convert_audio_bytes_to_tensor
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s %(levelname)s %(message)s')
@@ -87,7 +85,7 @@ async def main(args):
             instruct2_by_spk_id_request.instruct_text = args.instruct_text
             instruct2_by_spk_id_request.spk_id = args.spk_id
         else:
-            logging.info('Constructing tts_by_spk_id request')
+            logging.info('Constructing zero_shot_by_spk_id request')
             zero_shot_by_spk_id_request = request.zero_shot_by_spk_id_request
             zero_shot_by_spk_id_request.tts_text = args.tts_text
             zero_shot_by_spk_id_request.spk_id = args.spk_id
@@ -117,9 +115,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', type=str, default='0.0.0.0')
     parser.add_argument('--port', type=int, default=50000)
-    parser.add_argument('--mode', default='sft',
+    parser.add_argument('--mode', default='zero_shot_by_spk_id',
                         choices=['sft', 'zero_shot', 'cross_lingual', 'instruct2',
-                                 'instruct2_by_spk_id', 'tts_by_spk_id'],
+                                 'instruct2_by_spk_id', 'zero_shot_by_spk_id'],
                         help='Request mode')
     parser.add_argument('--stream', type=bool, default=False,
                         help='Streaming inference mode')
@@ -133,7 +131,7 @@ if __name__ == "__main__":
     parser.add_argument('--prompt_text', type=str,
                         default='希望你以后能够做的比我还好呦。')
     parser.add_argument('--prompt_wav', type=str,
-                        default='../../asset/zero_shot_prompt.wav')
+                        default='../../../asset/zero_shot_prompt.wav')
     parser.add_argument('--instruct_text', type=str,
                         default='Theo \'Crimson\', is a fiery, passionate rebel leader. Fights with fervor for justice, but struggles with impulsiveness.')
     parser.add_argument('--tts_wav', type=str, default='demo.wav')

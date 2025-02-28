@@ -7,7 +7,7 @@ ENGINE_ARGS = {
     # "enforce_eager": True,
     "gpu_memory_utilization": 0.4,
     "max_num_batched_tokens": 1024,
-    "max_model_len": 1024,
+    "max_model_len": 2048,
     "max_num_seqs": 256,
     "disable_log_requests": True,
     "disable_log_stats": True,
@@ -22,8 +22,8 @@ SAMPLING_PARAMS = {
     # "min_tokens": 80,       # 不支持设置最小的tokens数量设置，开启后vllm直接崩溃，无法启动
     # "presence_penalty": 1.0,    # 不支持设置
     # "frequency_penalty": 0.0,   # 不支持设置
-    "max_tokens": 1024,
-    "detokenize": False,
+    "max_tokens": 2048,
+    "detokenize": False,          # 目前 vllm 0.7.3 v1版本中设置无效，待后续版本更新后减少计算
     "ignore_eos": False,
     "output_kind": RequestOutputKind.DELTA  # 设置为DELTA，如调整该参数，请同时调整llm_inference的处理代码
 }

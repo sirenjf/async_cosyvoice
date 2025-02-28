@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+import signal
 import sys
 import asyncio
 from concurrent import futures
 import argparse
 from typing import AsyncGenerator, Callable, Tuple, AsyncIterator
+
+import torch
 
 import cosyvoice_pb2
 import cosyvoice_pb2_grpc
@@ -26,10 +29,10 @@ import grpc
 from grpc import aio
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(f'{ROOT_DIR}/../..')
-sys.path.append(f'{ROOT_DIR}/../../third_party/Matcha-TTS')
+sys.path.append(f'{ROOT_DIR}/../../..')
+sys.path.append(f'{ROOT_DIR}/../../../third_party/Matcha-TTS')
 from async_cosyvoice.async_cosyvoice import AsyncCosyVoice2
-from async_cosyvoice.async_grpc.utils import convert_audio_tensor_to_bytes, convert_audio_bytes_to_tensor
+from async_cosyvoice.runtime.async_grpc.utils import convert_audio_tensor_to_bytes, convert_audio_bytes_to_tensor
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(levelname)s %(message)s')
@@ -51,7 +54,7 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
             processor, processor_args = await self._prepare_processor(request)
 
             # 通过通用处理器生成响应
-            async for response in self._handle_generic(processor, processor_args):
+            async for response in self._handle_generic(request, processor, processor_args):
                 yield response
 
         except Exception as e:
@@ -133,39 +136,88 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
 
     async def _handle_generic(
             self,
+            request: cosyvoice_pb2.Request,
             processor: Callable,
             processor_args: list
     ) -> AsyncGenerator[cosyvoice_pb2.Response, None]:
         """通用流式处理管道"""
         logging.debug(f"Processing with {processor.__name__}")
-        async for model_chunk in processor(*processor_args):
-            # 将同步数据转换操作放入线程池
+        if request.stream:
+            # 每一帧当作一个独立的音频返回
+            assert request.single_file, ("目前流式下，只支持每帧返回一个独立的音频文件(single_file must be True)，"+
+                                         "如果需要不同的数据格式，请使用request.format=None返回原始torch.Tensor数据在客户端处理。")
+            if request.single_file:
+                async for model_chunk in processor(*processor_args):
+                    audio_bytes = await asyncio.to_thread(
+                        convert_audio_tensor_to_bytes,
+                        model_chunk['tts_speech'], request.format
+                    )
+                    yield cosyvoice_pb2.Response(tts_audio=audio_bytes, format=request.format)
+            # TODO: 需要在第一帧添加文件头信息，后续的帧直接返回音频数据
+            # 在保存音频时，以便使用追加模式写入同一个文件，同时可以使用支持流式播放的音频播放器进行播放。
+
+        else:
+            # 服务端合并音频数据后，再编码返回一个完整的音频文件
+            audio_data: torch.Tensor = None
+            async for model_chunk in processor(*processor_args):
+                if audio_data is not None:
+                    audio_data = torch.concat([audio_data, model_chunk['tts_speech']], dim=1)
+                else:
+                    audio_data = model_chunk['tts_speech']
+
             audio_bytes = await asyncio.to_thread(
                 convert_audio_tensor_to_bytes,
-                model_chunk['tts_speech']
+                audio_data, request.format
             )
-            yield cosyvoice_pb2.Response(tts_audio=audio_bytes)
+            yield cosyvoice_pb2.Response(tts_audio=audio_bytes, format=request.format)
 
 async def serve(args):
+    options = [
+        ('grpc.max_send_message_length', 100 * 1024 * 1024),     # 100M
+        ('grpc.max_receive_message_length', 100 * 1024 * 1024),
+    ]
     server = aio.server(
         migration_thread_pool=futures.ThreadPoolExecutor(max_workers=args.max_conc),
+        options=options,
         maximum_concurrent_rpcs=args.max_conc
     )
     cosyvoice_pb2_grpc.add_CosyVoiceServicer_to_server(CosyVoiceServiceImpl(args), server)
     server.add_insecure_port(f'0.0.0.0:{args.port}')
     await server.start()
     logging.info(f"Server listening on 0.0.0.0:{args.port}")
+    # 定义一个关闭函数
+    async def shutdown(signal, loop):
+        logging.info(f"Received exit signal {signal.name}...")
+        await server.stop(5)  # 5 秒内优雅关闭
+        loop.stop()
+
+    # 捕获信号
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):  # 处理 Ctrl+C 和 kill 信号
+        loop.add_signal_handler(
+            sig,
+            lambda s=sig: asyncio.create_task(shutdown(s, loop))
+        )
     await server.wait_for_termination()
 
+async def main(args):
+    try:
+        await serve(args)
+    except asyncio.CancelledError:
+        logging.info("Server shutdown complete.")
+    except Exception as e:
+        logging.error(f"Server encountered an error: {e}")
+    finally:
+        logging.info("Server has stopped.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=50000)
     parser.add_argument('--max_conc', type=int, default=4)
     parser.add_argument('--model_dir', type=str,
-                        default='../../pretrained_models/CosyVoice2-0.5B',
+                        default='../../../pretrained_models/CosyVoice2-0.5B',
                         help='local path or modelscope repo id')
     args = parser.parse_args()
 
     # 启动异步事件循环
-    asyncio.run(serve(args))
+    asyncio.run(main(args))

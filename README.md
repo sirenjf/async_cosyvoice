@@ -59,12 +59,12 @@ ENGINE_ARGS = {
     # 根据实际情况设置 
     "gpu_memory_utilization": 0.4,
     "max_num_batched_tokens": 1024,
-    "max_model_len": 1024,
+    "max_model_len": 2048,
     "max_num_seqs": 256,
 }
 
 SAMPLING_PARAMS = {
-    "max_tokens": 1024,
+    "max_tokens": 2048,
 }
 ```
 

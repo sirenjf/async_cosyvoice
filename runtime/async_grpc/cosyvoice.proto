@@ -8,7 +8,7 @@ service CosyVoice{
 }
 
 message Request {
-  // 新增公共参数
+  // 公共参数
   bool stream = 1;          // 流式输出控制
   float speed = 2;          // 速度控制
   bool text_frontend = 3;   // 是否启用文本前端处理
@@ -22,6 +22,8 @@ message Request {
     instruct2BySpkIdRequest instruct2_by_spk_id_request = 8;
     zeroshotBySpkIdRequest zero_shot_by_spk_id_request = 9;
   }
+  string format = 20;       // 输出音频格式
+  bool single_file = 21;    // stream时，每一帧是否当作一个独立的音频返回，目前只支持true
 }
 
 message sftRequest{
@@ -65,4 +67,5 @@ message zeroshotBySpkIdRequest{
 
 message Response{
   bytes tts_audio = 1;
+  string format = 2;
 }
