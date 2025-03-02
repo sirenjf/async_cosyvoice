@@ -68,8 +68,7 @@ class CosyVoice2Model:
         self.flow.fp16 = fp16
         if self.fp16 is True:
             self.flow.half()
-        # self.token_hop_len = 2 * self.flow.input_frame_rate
-        self.token_hop_len = 15
+        self.token_hop_len = 2 * self.flow.input_frame_rate
         # here we fix flow encoder/decoder decoding_chunk_size, in the future we will send it as arguments, or use cache
         self.flow.encoder.static_chunk_size = 2 * self.flow.input_frame_rate
         self.flow.decoder.estimator.static_chunk_size = 2 * self.flow.input_frame_rate * self.flow.token_mel_ratio
@@ -137,7 +136,7 @@ class CosyVoice2Model:
         assert isinstance(prompt_token_ids, list) , "prompt_token_ids should be List[int]"
         invalid = next((i for i, x in enumerate(prompt_token_ids) if not isinstance(x, int)), None)
         assert invalid is None, f"Error in prompt_token_ids, Non-int element at index {invalid}: {prompt_token_ids[invalid]}"
-        # print('prompt_token_ids:', prompt_token_ids)
+        # logging.debug('prompt_token_ids:', prompt_token_ids)
         # TODO: 增加上下文控制，取消请求时
         sampling_params = SamplingParams(**SAMPLING_PARAMS)
         sampling_params.stop_token_ids = stop_token_ids or [6561]
@@ -157,6 +156,7 @@ class CosyVoice2Model:
         prompt_text = tensor_to_list(prompt_text + torch.tensor(6564))
         llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token)
 
+        start_time = time.time()
         if isinstance(text, Generator):
             last_tokens = []
             prompt_token_ids = [self.sos_eos_token_id]
@@ -190,16 +190,20 @@ class CosyVoice2Model:
                             continue
                     async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6563]):
                         last_tokens = output.token_ids
-                        self.tts_speech_token_dict[uuid].extend(output.token_ids)
-                        prompt_token_ids.extend(output.token_ids)
-                    # delete the stop token
-                    self.tts_speech_token_dict[uuid] = self.tts_speech_token_dict[uuid][:-1]
-                    prompt_token_ids = prompt_token_ids[:-1]
+                        if last_tokens[-1] == 6563:
+                            need_add_tokens = last_tokens[:-1]
+                        else:
+                            need_add_tokens = last_tokens
+                        self.tts_speech_token_dict[uuid].extend(need_add_tokens)
+                        prompt_token_ids.extend(need_add_tokens)
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
             logging.info('no more text token, decode until met eos')
             async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561]):
-                self.tts_speech_token_dict[uuid].extend(output.token_ids)
-            self.tts_speech_token_dict[uuid] = self.tts_speech_token_dict[uuid][:-1]
+                if output.token_ids[-1] == 6561:
+                    need_add_tokens = output.token_ids[:-1]
+                else:
+                    need_add_tokens = output.token_ids
+                self.tts_speech_token_dict[uuid].extend(need_add_tokens)
         else:
             text = tensor_to_list(text + torch.tensor(6564))
             prompt_token_ids = [self.sos_eos_token_id] + prompt_text + text + \
@@ -211,12 +215,15 @@ class CosyVoice2Model:
                     stop_token_ids=[6561],
                     max_tokens=max_tokens,
             ):
-                self.tts_speech_token_dict[uuid].extend(output.token_ids)
-            self.tts_speech_token_dict[uuid] = self.tts_speech_token_dict[uuid][:-1]
+                if output.token_ids[-1] == 6561:
+                    need_add_tokens = output.token_ids[:-1]
+                else:
+                    need_add_tokens = output.token_ids
+                self.tts_speech_token_dict[uuid].extend(need_add_tokens)
 
         self.llm_end_dict[uuid] = True
-        logging.info('llm job done')
-        logging.debug(f'prompt_token_ids: {self.tts_speech_token_dict[uuid]}')
+        logging.info(f'llm job done, time cost: {time.time() - start_time:.3f}s')
+        logging.debug(f'speech_tokens: len: {len(self.tts_speech_token_dict[uuid])}  data: {self.tts_speech_token_dict[uuid]}')
         # 记录 prompt_token_ids self.tts_speech_token_dict[uuid] 数据用于后续的训练，与flow推理测试
 
 
@@ -266,14 +273,17 @@ class CosyVoice2Model:
             self.llm_end_dict[this_uuid] = False
             self.hift_cache_dict[this_uuid] = None
         # queue: asyncio.Queue[int|None] = asyncio.Queue()
-        task = asyncio.create_task(self.llm_job(text, prompt_text, llm_prompt_speech_token, llm_embedding, this_uuid))
+        llm_task = asyncio.create_task(self.llm_job(text, prompt_text, llm_prompt_speech_token, llm_embedding, this_uuid))
         if stream is True:
             token_offset = 0
-            await asyncio.sleep(0.1)
+            peer_chunk_token_num = 15     # 设置初始的每个chunk处理语音token的数量
+            await asyncio.sleep(0.05)
             loop = asyncio.get_event_loop()
+            start_time = time.time()
+            chunk_index = 0
             while True:
-                if len(self.tts_speech_token_dict[this_uuid]) - token_offset >= self.token_hop_len + self.flow.pre_lookahead_len:
-                    this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid][:token_offset + self.token_hop_len + self.flow.pre_lookahead_len]).unsqueeze(dim=0)
+                if (pending_num:= len(self.tts_speech_token_dict[this_uuid]) - token_offset) >= (peer_chunk_token_num + self.flow.pre_lookahead_len):
+                    this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid][:token_offset + peer_chunk_token_num + self.flow.pre_lookahead_len]).unsqueeze(dim=0)
                     this_tts_speech = await loop.run_in_executor(self.thread_executor,
                         self.token2wav,
                         this_tts_speech_token,
@@ -284,16 +294,27 @@ class CosyVoice2Model:
                             token_offset,
                             False
                     )
-                    token_offset += self.token_hop_len
+                    token_offset += peer_chunk_token_num
                     yield {'tts_speech': this_tts_speech.cpu()}
-                if self.llm_end_dict[this_uuid] is True:
-                    if len(self.tts_speech_token_dict[this_uuid]) - token_offset < self.token_hop_len + self.flow.pre_lookahead_len:
+                    chunk_index += 1
+                    cost_time = time.time() - start_time
+                    # 动态增大 peer_chunk_token_num，以减少调用 token2wav 的次数
+                    duration = token_offset/self.flow.input_frame_rate
+                    if (multiples:= (duration - cost_time)/(cost_time/chunk_index)) > 4:
+                        if self.llm_end_dict[this_uuid] is True:   # 直接一次性推理 token2wav 返回剩余的语音
+                            break
+                        else:
+                            # 有较多的计算时间，还可以等待llm生成更多的token，用于下次 token2wav 推理
+                            peer_chunk_token_num = (pending_num // 15 + 1) * 15
+                    elif multiples > 2:
+                        peer_chunk_token_num = (pending_num // 15) * 15
+                    logging.debug(f'multiples: {multiples:.2f}, peer_chunk_token_num: {peer_chunk_token_num}')
+                else:
+                    if self.llm_end_dict[this_uuid] is True:
                         break
                     else:
-                        continue
-                else:
-                    await asyncio.sleep(0.05)
-            await task
+                        await asyncio.sleep(0.02)
+            await llm_task
             # deal with remain tokens, make sure inference remain token len equals token_hop_len when cache_speech is not None
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
             this_tts_speech = await loop.run_in_executor(self.thread_executor,
@@ -304,12 +325,15 @@ class CosyVoice2Model:
                                                          flow_embedding,
                                                          this_uuid,
                                                          token_offset,
-                                                         False,
+                                                         True,
                                                          )
+            if this_tts_speech.shape[1] == 0:
+                logging.debug(f'no tts_speech_token shape: {this_tts_speech.shape}, data: {this_tts_speech}')
+                return
             yield {'tts_speech': this_tts_speech.cpu()}
         else:
             # deal with all tokens
-            await task
+            await llm_task
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
             loop = asyncio.get_event_loop()
             this_tts_speech = await loop.run_in_executor(self.thread_executor,
