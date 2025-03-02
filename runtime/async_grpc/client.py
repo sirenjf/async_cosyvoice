@@ -14,7 +14,7 @@
 import os
 import sys
 import asyncio  # 新增异步支持
-
+import time
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f'{ROOT_DIR}/../../..')
@@ -91,18 +91,25 @@ async def main(args):
             zero_shot_by_spk_id_request.spk_id = args.spk_id
         # 异步流式接收响应
         try:
+            start_time = time.time()
+            last_time = start_time
+            chunk_index = 0
             tts_audio = b''
             response_stream = stub.Inference(request)
             async for response in response_stream:
                 if response.tts_audio:
                     tts_audio += response.tts_audio
-                    logging.info(f'Received audio chunk {len(response.tts_audio)} bytes')
+                    logging.info(f'Received audio chunk {len(response.tts_audio)} bytes, chunk index: {chunk_index},' +
+                                 f'cost {time.time() - last_time:.3f}s  all cost {time.time() - start_time:.3f}s ')
+                    last_time = time.time()
+                    chunk_index += 1
 
             # 音频后处理
             if tts_audio:
                 tts_speech = convert_audio_bytes_to_tensor(tts_audio)
                 torchaudio.save(args.tts_wav, tts_speech, args.target_sr)
-                logging.info(f'Audio saved to {args.tts_wav} (duration: {tts_speech.shape[1] / args.target_sr:.2f}s)')
+                logging.info(f'Audio saved to {args.tts_wav} (duration: {tts_speech.shape[1] / args.target_sr:.2f}s) '+
+                             f'cost {time.time() - last_time:.3f}s  all cost {time.time() - start_time:.3f}s ')
             else:
                 logging.warning('Received empty audio response')
 
@@ -119,7 +126,7 @@ if __name__ == "__main__":
                         choices=['sft', 'zero_shot', 'cross_lingual', 'instruct2',
                                  'instruct2_by_spk_id', 'zero_shot_by_spk_id'],
                         help='Request mode')
-    parser.add_argument('--stream', type=bool, default=False,
+    parser.add_argument('--stream', action='store_true',
                         help='Streaming inference mode')
     parser.add_argument('--speed', type=float, default=1.0,
                         help='Speed up the audio')

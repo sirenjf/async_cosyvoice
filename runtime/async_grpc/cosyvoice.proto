@@ -22,8 +22,8 @@ message Request {
     instruct2BySpkIdRequest instruct2_by_spk_id_request = 8;
     zeroshotBySpkIdRequest zero_shot_by_spk_id_request = 9;
   }
-  string format = 20;       // 输出音频格式
-  bool single_file = 21;    // stream时，每一帧是否当作一个独立的音频返回，目前只支持true
+  string format = 20;                // 输出音频格式
+  bool is_frame_independent = 21;    // stream时，每一帧是否当作一个独立的音频返回，目前只支持true
 }
 
 message sftRequest{

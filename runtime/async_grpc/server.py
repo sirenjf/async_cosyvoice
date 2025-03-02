@@ -41,7 +41,7 @@ logging.basicConfig(level=logging.DEBUG,
 class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     def __init__(self, args):
         try:
-            self.cosyvoice = AsyncCosyVoice2(args.model_dir)
+            self.cosyvoice = AsyncCosyVoice2(args.model_dir, load_jit=args.load_jit, load_trt=args.load_trt, fp16=args.fp16)
         except Exception:
             raise RuntimeError('no valid model_type! just support AsyncCosyVoice2.')
         logging.info('grpc service initialized')
@@ -144,9 +144,9 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
         logging.debug(f"Processing with {processor.__name__}")
         if request.stream:
             # 每一帧当作一个独立的音频返回
-            assert request.single_file, ("目前流式下，只支持每帧返回一个独立的音频文件(single_file must be True)，"+
+            assert request.format == "" or request.is_frame_independent, ("目前流式下，只支持每帧返回一个独立的音频文件(is_frame_independent must be True)，"+
                                          "如果需要不同的数据格式，请使用request.format=None返回原始torch.Tensor数据在客户端处理。")
-            if request.single_file:
+            if request.format == "" or request.is_frame_independent:
                 async for model_chunk in processor(*processor_args):
                     audio_bytes = await asyncio.to_thread(
                         convert_audio_tensor_to_bytes,
@@ -200,9 +200,9 @@ async def serve(args):
         )
     await server.wait_for_termination()
 
-async def main(args):
+def main(args):
     try:
-        await serve(args)
+        asyncio.run(serve(args))
     except asyncio.CancelledError:
         logging.info("Server shutdown complete.")
     except Exception as e:
@@ -217,7 +217,10 @@ if __name__ == '__main__':
     parser.add_argument('--model_dir', type=str,
                         default='../../../pretrained_models/CosyVoice2-0.5B',
                         help='local path or modelscope repo id')
+    parser.add_argument('--load_jit', action='store_true', help='load jit model')
+    parser.add_argument('--load_trt', action='store_true', help='load tensorrt model')
+    parser.add_argument('--fp16', action='store_true', help='use fp16')
     args = parser.parse_args()
+    main(args)
 
-    # 启动异步事件循环
-    asyncio.run(main(args))
+    # python server.py --load_jit --load_trt --fp16
