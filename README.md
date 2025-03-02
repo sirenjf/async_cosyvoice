@@ -7,8 +7,8 @@
 
 该项目是为了加速cosyvoice2的推理，仅支持linux系统，依赖vllm。
 1. **使用vllm加速llm部分的推理**
-2. flow部分的推理**未优化**，无法批次处理，期待大佬来优化优化
-3. 单任务流式情况下，首包延迟在300-350ms左右，但耗时较非流式有所增加
+2. flow部分的推理**未优化**，无法直接批处理，可以使用官方的 load_jit load_trt 模式
+3. 单任务流式情况下，首包延迟在250-350ms左右，但耗时较非流式有所增加
 4. grpc-async服务端
 
 ---
@@ -71,21 +71,15 @@ SAMPLING_PARAMS = {
 7. 启动grpc服务
 ```bash
 #1.由 proto 文件生成依赖代码
-cd grpc-async
+cd runtime/grpc-async
 python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. cosyvoice.proto
-python server.py --model_path=/path/to/model
+python server.py
 ```
 
 8. 测试grpc服务
 ```bash
 python client.py
 ```
-
----
-### 潜在问题：
-- 使用的vllm中的sampler替代了cosyvoice的get_sampler_id, 可能会导致不稳定的情况，目前设置top_p=1的情况下，暂无特殊情况。
-- 使用 steam=True 时，flow部分的多次计算会降低整体推理速度。建议使用对字符进行切片后，使用 steam=False。
-- 并发时因为flow部分的推理不能批处理，效率较低，期待优化。
 
 ---
 ### 测试效果
@@ -96,15 +90,17 @@ python client.py
 - 测试说明: tts_text为中文，使用 **jit 和 trt**
 - 测试结果: 具体数据及过程详见[speed_test.ipynb](speed_test.ipynb)
   - 进行非流式推理时，运行单任务推理rtf能从原来的0.25-0.30，经过vllm加速后能达到0.1-0.15；
-  - 加速后进行流式推理时，每15个语音token就生成音频返回的话，首包延迟能在300-350ms之间；
-  - 流式推理会严重降低速度,建议使用 inference_zero_shot_by_spk_id 的非流式推理。
+  - 加速后进行流式推理，首包延迟能在250-350ms之间；
+  - 流式推理会降低速度，建议使用 inference_zero_shot_by_spk_id 的非流式推理；
+  - 并发推理时，建议使用 load_jit 或 load_trt，加快 flow 部分的推理；
+  - 非流式并发能够有效支持20个并发（rtf<1），流式并发仅能支持5个并发；
 
 ---
 ### 说明：
 
 1. 目前使用的 vllm 最新版本，并开启了 VLLM_USE_V1 = '1'
 2. 目前cuda环境是12.4, 部分依赖文件使用的较新版本 vllm==0.7.3 torch==2.5.1 onnxruntime-gpu==1.19.0
-3. 如果使用load_trt，需手动安装依赖tensorrt，load_trt对 flow 中的decoder有一定的帮助，但显存占用较大(默认启动会占用 4.7G 显存，应该可以设置减少)。
+3. 如果使用 load_trt，需安装 tensorrt 依赖，能有效提升flow模型的推理速度，但显存占用较大(默认启动会占用 4.7G 显存，应该可以设置减少)。
    安装方式： 
 ```bash
 pip install tensorrt-cu12==10.0.1 tensorrt-cu12-bindings==10.0.1 tensorrt-cu12-libs==10.0.1
@@ -122,8 +118,8 @@ pip install tensorrt-cu12==10.0.1 tensorrt-cu12-bindings==10.0.1 tensorrt-cu12-l
 import os
 import sys
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(f'{ROOT_DIR}/../..')
-sys.path.append(f'{ROOT_DIR}/../../third_party/Matcha-TTS')
+sys.path.append(f'{ROOT_DIR}/../../..')
+sys.path.append(f'{ROOT_DIR}/../../../third_party/Matcha-TTS')
 ```
 5. 第一次运行时，如果使用的WeTextProcessing则先运行下面的代码，生成缓存。代码frontend中overwrite_cache=False避免了后续运行时重复生成。
 ```python
