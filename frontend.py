@@ -93,11 +93,11 @@ class CosyVoiceFrontEnd:
         if isinstance(text, Generator):
             logging.info('get tts_text generator, will return _extract_text_token_generator!')
             # NOTE add a dummy text_token_len for compatibility
-            return self._extract_text_token_generator(text), torch.tensor([0], dtype=torch.int32).to(self.device)
+            return self._extract_text_token_generator(text), torch.tensor([0], dtype=torch.int32)
         else:
             text_token = self.tokenizer.encode(text, allowed_special=self.allowed_special)
-            text_token = torch.tensor([text_token], dtype=torch.int32).to(self.device)
-            text_token_len = torch.tensor([text_token.shape[1]], dtype=torch.int32).to(self.device)
+            text_token = torch.tensor([text_token], dtype=torch.int32)
+            text_token_len = torch.tensor([text_token.shape[1]], dtype=torch.int32)
             return text_token, text_token_len
 
     def _extract_text_token_generator(self, text_generator):
@@ -115,8 +115,8 @@ class CosyVoiceFrontEnd:
                                                           feat.detach().cpu().numpy(),
                                                           self.speech_tokenizer_session.get_inputs()[1].name:
                                                           np.array([feat.shape[2]], dtype=np.int32)})[0].flatten().tolist()
-        speech_token = torch.tensor([speech_token], dtype=torch.int32).to(self.device)
-        speech_token_len = torch.tensor([speech_token.shape[1]], dtype=torch.int32).to(self.device)
+        speech_token = torch.tensor([speech_token], dtype=torch.int32)
+        speech_token_len = torch.tensor([speech_token.shape[1]], dtype=torch.int32)
         return speech_token, speech_token_len
 
     def _extract_spk_embedding(self, speech):
