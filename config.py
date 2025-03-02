@@ -27,3 +27,11 @@ SAMPLING_PARAMS = {
     "ignore_eos": False,
     "output_kind": RequestOutputKind.DELTA  # 设置为DELTA，如调整该参数，请同时调整llm_inference的处理代码
 }
+
+# 编写一个代码检查是否有 private_config.py 文件，如果有则读取该文件，并【完全】覆盖ENGINE_ARGS 和 SAMPLING_PARAMS 的值
+try:
+    from async_cosyvoice.private_config import ENGINE_ARGS, SAMPLING_PARAMS
+    import logging
+    logging.info("Loaded private_config.py")
+except ImportError:
+    pass
