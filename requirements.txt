@@ -1,4 +1,7 @@
-vllm
+vllm==0.7.3
+pydantic==2.10.6
+torch==2.5.1
+torchaudio==2.5.1
 
 conformer==0.3.2
 
@@ -24,7 +27,6 @@ onnxruntime-gpu==1.19.0; sys_platform == 'linux'
 #openai-whisper==20231117
 openai-whisper==20240930
 protobuf==4.25
-pydantic==2.7.0
 pyworld==0.3.4
 rich==13.7.1
 soundfile==0.12.1
