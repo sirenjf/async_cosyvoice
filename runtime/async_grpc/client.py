@@ -78,7 +78,7 @@ async def main(args):
             instruct2_request.instruct_text = args.instruct_text
             prompt_speech = load_wav(args.prompt_wav, 16000)
             instruct2_request.prompt_audio = convert_audio_tensor_to_bytes(prompt_speech)
-        if args.mode == 'instruct2_by_spk_id':
+        elif args.mode == 'instruct2_by_spk_id':
             logging.info('Constructing instruct2_by_spk_id request')
             instruct2_by_spk_id_request = request.instruct2_by_spk_id_request
             instruct2_by_spk_id_request.tts_text = args.tts_text
