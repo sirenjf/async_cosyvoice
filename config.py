@@ -11,6 +11,7 @@ ENGINE_ARGS = {
     "max_num_seqs": 256,
     "disable_log_requests": True,
     "disable_log_stats": True,
+    "dtype": "float16",
 }
 
 from vllm.sampling_params import RequestOutputKind
