@@ -164,7 +164,6 @@ class CosyVoice2Model:
             for this_text in text:
                 this_text = tensor_to_list(this_text + torch.tensor(6564))
                 # text need tokens
-                assert isinstance(this_text, list), "text need token ids List[int]."
                 text_tokens_cache += this_text
                 while len(llm_prompt_speech_token) != 0:
                     if len(text_tokens_cache) >= self.mix_ratio[0]:
@@ -175,18 +174,14 @@ class CosyVoice2Model:
                         text_tokens_cache = text_tokens_cache[self.mix_ratio[0]:]
                         llm_prompt_speech_token = llm_prompt_speech_token[self.mix_ratio[1]:]
                     else:
-                        logging.info('not enough text token to decode, wait for more')
                         break
                 if len(llm_prompt_speech_token) == 0:
                     if (len(last_tokens) > 0 and last_tokens[-1] == 6563) or len(prompt_token_ids) == 1:
-                        logging.info('get fill token, need to append more text token')
                         if len(text_tokens_cache) >= self.mix_ratio[0]:
                             text_tokens_temp = text_tokens_cache[:self.mix_ratio[0]]
                             prompt_token_ids += text_tokens_temp
-                            logging.info('append {} text token'.format(len(text_tokens_temp)))
                             text_tokens_cache = text_tokens_cache[self.mix_ratio[0]:]
                         else:
-                            logging.info('not enough text token to decode, wait for more')
                             continue
                     async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6563]):
                         last_tokens = output.token_ids
@@ -197,7 +192,6 @@ class CosyVoice2Model:
                         self.tts_speech_token_dict[uuid].extend(need_add_tokens)
                         prompt_token_ids.extend(need_add_tokens)
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
-            logging.info('no more text token, decode until met eos')
             async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561]):
                 if output.token_ids[-1] == 6561:
                     need_add_tokens = output.token_ids[:-1]
