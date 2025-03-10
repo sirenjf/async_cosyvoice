@@ -234,7 +234,7 @@ class CosyVoiceFrontEnd:
 
     def generate_spk_info(self, spk_id: str, prompt_text: str, prompt_speech_16k: torch.Tensor, resample_rate:int=24000, name: str=None):
         assert isinstance(spk_id, str)
-        assert spk_id not in self.spk2info, "spk_id already exists"
+        # assert spk_id not in self.spk2info, "spk_id already exists"
         prompt_text_token, _ = self._extract_text_token(prompt_text)
         prompt_speech_resample = torchaudio.transforms.Resample(orig_freq=16000, new_freq=resample_rate)(prompt_speech_16k)
         speech_feat, _ = self._extract_speech_feat(prompt_speech_resample)

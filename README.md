@@ -107,7 +107,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f'{ROOT_DIR}/../../..')
 sys.path.append(f'{ROOT_DIR}/../../../third_party/Matcha-TTS')
 ```
-5. 第一次运行时，如果使用的WeTextProcessing则先运行下面的代码，生成缓存。代码frontend中overwrite_cache=False避免了后续运行时重复生成。
+6. 第一次运行时，如果使用的WeTextProcessing则先运行下面的代码，生成缓存，以免frontend过滤掉儿化音。代码frontend中overwrite_cache=False避免了后续运行时重复生成。
 ```python
 from tn.chinese.normalizer import Normalizer as ZhNormalizer
 zh_tn_model = ZhNormalizer(overwrite_cache=True)
