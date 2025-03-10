@@ -7,7 +7,7 @@
 
 该项目是为了加速cosyvoice2的推理，仅支持linux系统，依赖vllm。
 1. **使用vllm加速llm部分的推理**
-2. flow部分的推理**未优化**，无法直接批处理，可以使用官方的 load_jit load_trt 模式
+2. flow部分的推理**未优化**，无法直接批处理，建议使用官方的 load_jit load_trt 模式
 3. 单任务流式情况下，首包延迟在250-350ms左右，但耗时较非流式有所增加
 4. grpc-async服务端
 
@@ -31,15 +31,12 @@ git submodule update --init --recursive
 2. 在cosyvoice项目路径下再clone本项目，或添加本项目为子模块
 ```bash
 git clone https://github.com/qi-hua/async_cosyvoice.git
-or
-git submodule add https://github.com/qi-hua/async_cosyvoice.git async_cosyvoice
 ```
 
 3. 在async_cosyvoice目录下安装所有依赖
 ```bash
 cd async_cosyvoice
-uv pip install -r requirements.txt
-#或者使用 pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
 4. 下载CosyVoice2-0.5B模型文件 
@@ -71,7 +68,7 @@ SAMPLING_PARAMS = {
 7. 启动grpc服务
 ```bash
 #1.由 proto 文件生成依赖代码
-cd runtime/grpc-async
+cd runtime/async_grpc
 python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. cosyvoice.proto
 python server.py
 ```
@@ -100,20 +97,9 @@ python client.py
 
 1. 目前使用的 vllm 最新版本，并开启了 VLLM_USE_V1 = '1'
 2. 目前cuda环境是12.4, 部分依赖文件使用的较新版本 vllm==0.7.3 torch==2.5.1 onnxruntime-gpu==1.19.0
-3. 如果使用 load_trt，需安装 tensorrt 依赖，能有效提升flow模型的推理速度，但显存占用较大(默认启动会占用 4.7G 显存，应该可以设置减少)。
-   安装方式： 
-```bash
-pip install tensorrt-cu12==10.0.1 tensorrt-cu12-bindings==10.0.1 tensorrt-cu12-libs==10.0.1
-
-# 启动时会看到如下信息
-[TRT] [I] Loaded engine size: 158 MiB
-[TRT] [I] [MS] Running engine with multi stream info
-[TRT] [I] [MS] Number of aux streams is 1
-[TRT] [I] [MS] Number of total worker streams is 2
-[TRT] [I] [MS] The main stream provided by execute/enqueue calls is the first worker stream
-[TRT] [I] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +4545, now: CPU 0, GPU 4681 (MiB)
-```
-4. 如在其他地方使用，需要参照async_grpc中的server.py设置sys.path，以正确的引用 cosyvoice、async_cosyvoice
+3. 如果使用 load_trt，能有效提升flow模型的推理速度，但显存占用较大(默认启动会占用 4.7G 显存，应该可以设置减少)。
+4. 启动 cosyvoice2 实例后，需要进行**预热**，推理10次以上，加载frontend模型以及 预热trt模型。
+5. 如在其他地方使用，需要参照async_grpc中的server.py设置sys.path，以正确的引用 cosyvoice、async_cosyvoice
 ```python
 import os
 import sys

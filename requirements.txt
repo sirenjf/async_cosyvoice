@@ -33,3 +33,8 @@ soundfile==0.12.1
 tensorboard==2.14.0
 wget==3.2
 WeTextProcessing==1.0.3
+
+# tensorrt
+tensorrt-cu12==10.0.1
+tensorrt-cu12-bindings==10.0.1
+tensorrt-cu12-libs==10.0.1
