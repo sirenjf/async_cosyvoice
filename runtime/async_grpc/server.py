@@ -41,8 +41,9 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     def __init__(self, args):
         try:
             self.cosyvoice = AsyncCosyVoice2(args.model_dir, load_jit=args.load_jit, load_trt=args.load_trt, fp16=args.fp16)
-        except Exception:
-            raise RuntimeError('no valid model_type! just support AsyncCosyVoice2.')
+        except Exception as e:
+            print('no valid model_type! just support AsyncCosyVoice2.')
+            raise e
         logging.info('grpc service initialized')
 
     async def Inference(self, request: cosyvoice_pb2.Request, context: aio.ServicerContext) -> AsyncIterator[
@@ -65,7 +66,6 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
 
     async def _prepare_processor(self, request: cosyvoice_pb2.Request) -> Tuple[Callable, list]:
         """预处理并返回处理器及其参数"""
-        print(request)
         match request.WhichOneof('request_type'):
             case 'sft_request':
                 return self.cosyvoice.inference_sft, [

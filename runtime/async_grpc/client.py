@@ -1,49 +1,55 @@
-# Copyright (c) 2024 Alibaba Inc (authors: Xiang Lyu)
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 import os
 import sys
 import asyncio
 import time
+import numpy as np
+import soundfile as sf
+import librosa
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f'{ROOT_DIR}/../../..')
 sys.path.append(f'{ROOT_DIR}/../../../third_party/Matcha-TTS')
 import logging
 import argparse
-import torchaudio
 import cosyvoice_pb2
 import cosyvoice_pb2_grpc
 import grpc
-from grpc import aio  # 使用异步grpc模块
-from cosyvoice.utils.file_utils import load_wav
+from grpc import aio
 
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s %(levelname)s %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s'
+)
 
-import torch
-import numpy as np
+def load_wav(wav_path: str, target_sr: int) -> np.ndarray:
+    """使用 soundfile 替代 torchaudio 加载音频"""
+    try:
+        data, sample_rate = sf.read(wav_path, dtype='float32')
+        # 多声道转单声道
+        if len(data.shape) > 1:
+            data = np.mean(data, axis=1)
+        # 重采样
+        if sample_rate != target_sr:
+            data = librosa.resample(
+                data, 
+                orig_sr=sample_rate, 
+                target_sr=target_sr
+            )
+        # 添加 batch 维度 (1, samples)
+        return data.reshape(1, -1)
+    except Exception as e:
+        logging.error(f"Error loading {wav_path}: {str(e)}")
+        raise
 
-def convert_audio_bytes_to_tensor(raw_audio: bytes) -> torch.Tensor:
-    """同步音频转换方法"""
-    return torch.from_numpy(np.array(np.frombuffer(raw_audio, dtype=np.float32))).unsqueeze(0)
+def convert_audio_bytes_to_ndarray(raw_audio: bytes) -> np.ndarray:
+    """字节转 numpy 数组"""
+    return np.frombuffer(raw_audio, dtype=np.float32).reshape(1, -1)
 
-def convert_audio_tensor_to_bytes(tensor: torch.Tensor) -> bytes:
-    """同步Tensor转字节方法"""
-    return tensor.numpy().astype(np.float32).tobytes()
+def convert_audio_ndarray_to_bytes(array: np.ndarray) -> bytes:
+    """numpy 数组转字节"""
+    return array.astype(np.float32).tobytes()
 
 async def main(args):
-    # 使用异步通道和上下文
     async with aio.insecure_channel(f"{args.host}:{args.port}") as channel:
         stub = cosyvoice_pb2_grpc.CosyVoiceStub(channel)
         request = cosyvoice_pb2.Request()
@@ -51,7 +57,7 @@ async def main(args):
         request.speed = args.speed
         request.text_frontend = args.text_frontend
 
-        # 请求构造逻辑保持不变
+        # 构造请求
         if args.mode == 'sft':
             logging.info('Constructing sft request')
             sft_request = request.sft_request
@@ -63,21 +69,20 @@ async def main(args):
             zero_shot_request.tts_text = args.tts_text
             zero_shot_request.prompt_text = args.prompt_text
             prompt_speech = load_wav(args.prompt_wav, 16000)
-            print(prompt_speech)
-            zero_shot_request.prompt_audio = convert_audio_tensor_to_bytes(prompt_speech)
+            zero_shot_request.prompt_audio = convert_audio_ndarray_to_bytes(prompt_speech)
         elif args.mode == 'cross_lingual':
             logging.info('Constructing cross_lingual request')
             cross_lingual_request = request.cross_lingual_request
             cross_lingual_request.tts_text = args.tts_text
             prompt_speech = load_wav(args.prompt_wav, 16000)
-            cross_lingual_request.prompt_audio = convert_audio_tensor_to_bytes(prompt_speech)
+            cross_lingual_request.prompt_audio = convert_audio_ndarray_to_bytes(prompt_speech)
         elif args.mode == 'instruct2':
             logging.info('Constructing instruct request')
             instruct2_request = request.instruct2_request
             instruct2_request.tts_text = args.tts_text
             instruct2_request.instruct_text = args.instruct_text
             prompt_speech = load_wav(args.prompt_wav, 16000)
-            instruct2_request.prompt_audio = convert_audio_tensor_to_bytes(prompt_speech)
+            instruct2_request.prompt_audio = convert_audio_ndarray_to_bytes(prompt_speech)
         elif args.mode == 'instruct2_by_spk_id':
             logging.info('Constructing instruct2_by_spk_id request')
             instruct2_by_spk_id_request = request.instruct2_by_spk_id_request
@@ -106,9 +111,15 @@ async def main(args):
 
             # 音频后处理
             if tts_audio:
-                tts_speech = convert_audio_bytes_to_tensor(tts_audio)
-                torchaudio.save(args.tts_wav, tts_speech, args.target_sr)
-                logging.info(f'Audio saved to {args.tts_wav} (duration: {tts_speech.shape[1] / args.target_sr:.2f}s) '+
+                tts_array = convert_audio_bytes_to_ndarray(tts_audio)
+                # 保存为 (samples, 1) 格式
+                sf.write(
+                    args.tts_wav,
+                    tts_array.T,  # 转置为 (samples, 1)
+                    args.target_sr
+                )
+                duration = tts_array.shape[1] / args.target_sr
+                logging.info(f'Audio saved to {args.tts_wav} (duration: {duration:.2f}s) '+
                              f'cost {time.time() - last_time:.3f}s  all cost {time.time() - start_time:.3f}s ')
             else:
                 logging.warning('Received empty audio response')
