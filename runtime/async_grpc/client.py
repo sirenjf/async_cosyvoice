@@ -13,7 +13,7 @@
 # limitations under the License.
 import os
 import sys
-import asyncio  # 新增异步支持
+import asyncio
 import time
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))

@@ -14,6 +14,8 @@
 import asyncio
 import logging
 import os
+import queue
+import threading
 from typing import Generator, List
 import torch
 import numpy as np
@@ -97,6 +99,15 @@ class CosyVoice2Model:
         self.task_token_id = self.sos_eos_token_id + 1
         self.zero_token_id = self.task_token_id + 1
 
+        # vllm 的推理任务需要在一个固定的事件循环中，因此启动一个后台线程专用于推理任务
+        self.background_loop = asyncio.new_event_loop()
+        self.loop_thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        self.loop_thread.start()
+
+    def _run_event_loop(self):
+        asyncio.set_event_loop(self.background_loop)
+        self.background_loop.run_forever()
+
     def load(self, flow_model, hift_model):
         self.flow.load_state_dict(torch.load(flow_model, weights_only=True, map_location=self.device), strict=True)
         self.flow.to(self.device).eval()
@@ -132,12 +143,7 @@ class CosyVoice2Model:
         # [TRT] [I] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +4545, now: CPU 0, GPU 4681 (MiB)
         # 该代码无法正常执行 self.flow.decoder.estimator.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)   # 1GB
 
-    async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None, max_tokens=None):
-        assert isinstance(prompt_token_ids, list) , "prompt_token_ids should be List[int]"
-        invalid = next((i for i, x in enumerate(prompt_token_ids) if not isinstance(x, int)), None)
-        assert invalid is None, f"Error in prompt_token_ids, Non-int element at index {invalid}: {prompt_token_ids[invalid]}"
-        # logging.debug('prompt_token_ids:', prompt_token_ids)
-        # TODO: 增加上下文控制，取消请求时
+    async def background_llm_inference(self, out_queue, prompt_token_ids, request_id, stop_token_ids, max_tokens):
         sampling_params = SamplingParams(**SAMPLING_PARAMS)
         sampling_params.stop_token_ids = stop_token_ids or [6561]
         if max_tokens:
@@ -149,8 +155,22 @@ class CosyVoice2Model:
                 sampling_params=sampling_params,
                 request_id=request_id or f"{time.time()}",
         ):
-            yield output.outputs[0]
+            out_queue.put((output.outputs[0], output.finished))
 
+    async def llm_inference(self, prompt_token_ids: List[int], request_id: str=None, stop_token_ids=None, max_tokens=None):
+        out_queue = queue.Queue()
+        asyncio.run_coroutine_threadsafe(
+            self.background_llm_inference(out_queue, prompt_token_ids, request_id, stop_token_ids, max_tokens), self.background_loop
+        )
+        # 接收 out_queue 返回的结果
+        finished = False
+        while not finished:
+            if not out_queue.empty():
+                (output, finished) = out_queue.get_nowait()
+                yield output
+            else:
+                # 主动等待5ms
+                await asyncio.sleep(0.005)
 
     async def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
         prompt_text = tensor_to_list(prompt_text + torch.tensor(6564))
@@ -302,7 +322,7 @@ class CosyVoice2Model:
                             peer_chunk_token_num = (pending_num // 15 + 1) * 15
                     elif multiples > 2:
                         peer_chunk_token_num = (pending_num // 15) * 15
-                    logging.debug(f'multiples: {multiples:.2f}, peer_chunk_token_num: {peer_chunk_token_num}')
+                    logging.debug(f'the multiples: {multiples:.2f}, next chunk_token_num: {peer_chunk_token_num}')
                 else:
                     if self.llm_end_dict[this_uuid] is True:
                         break

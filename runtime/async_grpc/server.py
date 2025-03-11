@@ -24,7 +24,6 @@ import torch
 import cosyvoice_pb2
 import cosyvoice_pb2_grpc
 import logging
-logging.getLogger('matplotlib').setLevel(logging.WARNING)
 import grpc
 from grpc import aio
 
@@ -34,7 +33,7 @@ sys.path.append(f'{ROOT_DIR}/../../../third_party/Matcha-TTS')
 from async_cosyvoice.async_cosyvoice import AsyncCosyVoice2
 from async_cosyvoice.runtime.async_grpc.utils import convert_audio_tensor_to_bytes, convert_audio_bytes_to_tensor
 
-logging.basicConfig(level=logging.DEBUG,
+logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s %(levelname)s %(message)s')
 
 
