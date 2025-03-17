@@ -2,8 +2,6 @@
 # from vllm.engine.arg_utils import AsyncEngineArgs
 # AsyncEngineArgs
 ENGINE_ARGS = {
-    "block_size": 16,
-    "swap_space": 0,
     # "enforce_eager": True,
     "gpu_memory_utilization": 0.4,
     "max_num_batched_tokens": 1024,

@@ -38,7 +38,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.sequence import IntermediateTensors
 
-from vllm.model_executor.models.interfaces import T
+from vllm.model_executor.models.interfaces import T, SupportsLoRA, SupportsPP
 from vllm.model_executor.models.qwen2 import Qwen2Model
 
 from vllm.model_executor.models.utils import AutoWeightsLoader, maybe_prefix, merge_multimodal_embeddings
@@ -48,7 +48,7 @@ logger = init_logger(__name__)
 IGNORE_ID = -1
 
 
-class CosyVoice2Model(nn.Module):
+class CosyVoice2Model(nn.Module, SupportsLoRA, SupportsPP):
 
     packed_modules_mapping = {
         "qkv_proj": [

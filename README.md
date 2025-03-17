@@ -14,7 +14,7 @@
 ---
 ### 环境准备(使用python=3.10.16)
 ```bash
-conda create -n cosyvoice2 python=3.10.16
+conda create -n cosyvoice2 python=3.10.16 -y
 conda activate cosyvoice2
 ```
 
@@ -26,6 +26,11 @@ conda activate cosyvoice2
 git clone https://github.com/FunAudioLLM/CosyVoice.git
 cd CosyVoice
 git submodule update --init --recursive
+
+# 安装系统依赖
+conda install -y -c conda-forge pynini==2.1.5
+sudo apt-get update
+sudo apt-get install sox libsox-dev -y
 ````
 
 2. 在cosyvoice项目路径下再clone本项目，或添加本项目为子模块
