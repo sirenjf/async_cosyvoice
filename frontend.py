@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from functools import partial
+from collections import OrderedDict
 from typing import Generator, Optional
 import json
 import onnxruntime
@@ -50,6 +51,29 @@ class SpeakerInfo(BaseModel):
     embedding: torch.Tensor
 
 
+class LRUCache(OrderedDict):
+    """LRU缓存容器，继承自OrderedDict"""
+
+    def __init__(self, max_size=100_000):
+        super().__init__()
+        self.max_size = max_size
+
+    def __getitem__(self, key):
+        # 访问时移动到末尾（表示最新）
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def __setitem__(self, key, value):
+        # 插入时检查容量，超限则移除最旧项
+        if key in self:
+            self.move_to_end(key)
+        else:
+            if len(self) >= self.max_size:
+                self.popitem(last=False)
+        super().__setitem__(key, value)
+
+
 class CosyVoiceFrontEnd:
 
     def __init__(self,
@@ -70,11 +94,13 @@ class CosyVoiceFrontEnd:
                                                                      providers=["CUDAExecutionProvider" if torch.cuda.is_available() else
                                                                                 "CPUExecutionProvider"])
 
-        self.spk2info_path = spk2info
+        self.spk2info = LRUCache(max_size=10000)
         if os.path.exists(spk2info):
-            self.spk2info = torch.load(spk2info, map_location=self.device, weights_only=False)
-        else:
-            self.spk2info = {}
+            spk_infos = torch.load(spk2info, map_location=self.device, weights_only=False)
+            for spk_id, info in spk_infos.items():
+                self.spk2info[spk_id] = info
+        self.spk2info_path = os.path.join(os.path.dirname(os.path.abspath(spk2info)), 'spk2info')
+        os.makedirs(self.spk2info_path, exist_ok=True)
         self.allowed_special = allowed_special
         self.use_ttsfrd = use_ttsfrd
         if self.use_ttsfrd:
@@ -171,6 +197,7 @@ class CosyVoiceFrontEnd:
 
     def frontend_sft(self, tts_text, spk_id):
         tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
+        self.load_spk_info(spk_id)
         embedding = self.spk2info[spk_id]['embedding']
         assert embedding is not None
         model_input = {'text': tts_text_token, 'text_len': tts_text_token_len, 'llm_embedding': embedding, 'flow_embedding': embedding}
@@ -234,7 +261,6 @@ class CosyVoiceFrontEnd:
 
     def generate_spk_info(self, spk_id: str, prompt_text: str, prompt_speech_16k: torch.Tensor, resample_rate:int=24000, name: str=None):
         assert isinstance(spk_id, str)
-        # assert spk_id not in self.spk2info, "spk_id already exists"
         prompt_text_token, _ = self._extract_text_token(prompt_text)
         prompt_speech_resample = torchaudio.transforms.Resample(orig_freq=16000, new_freq=resample_rate)(prompt_speech_16k)
         speech_feat, _ = self._extract_speech_feat(prompt_speech_resample)
@@ -260,11 +286,24 @@ class CosyVoiceFrontEnd:
         if isinstance(spk_info, BaseModel):
             spk_info = spk_info.model_dump()
         self.spk2info[spk_id] = spk_info
-        if self.spk2info_path:
-            torch.save(self.spk2info, self.spk2info_path)
+        torch.save(self.spk2info[spk_id], os.path.join(self.spk2info_path, spk_id + '.pt'))
+
+    def load_spk_info(self, spk_id: str):
+        if spk_id not in self.spk2info:
+            spk_info_path = os.path.join(self.spk2info_path, spk_id + '.pt')
+            if not os.path.exists(spk_info_path):
+                raise ValueError(f'not found spk2info: {spk_id}')
+            spk_info = torch.load(spk_info_path, map_location=self.device, weights_only=False)
+            self.spk2info[spk_id] = spk_info
+
+    def delete_spk_info(self, spk_id: str):
+        if spk_id in self.spk2info:
+            del self.spk2info[spk_id]
+        if os.path.exists(os.path.join(self.spk2info_path, spk_id + '.pt')):
+            os.remove(os.path.join(self.spk2info_path, spk_id + '.pt'))
 
     def frontend_instruct2_by_spk_id(self, tts_text, instruct_text, spk_id):
-        assert spk_id in self.spk2info
+        self.load_spk_info(spk_id)
         tts_text_token, _ = self._extract_text_token(tts_text)
         prompt_text_token, _ = self._extract_text_token(instruct_text + '<|endofprompt|>')
         model_input = {'text': tts_text_token,
@@ -277,7 +316,7 @@ class CosyVoiceFrontEnd:
         return model_input
 
     def frontend_zero_shot_by_spk_id(self, tts_text, spk_id):
-        assert spk_id in self.spk2info
+        self.load_spk_info(spk_id)
         tts_text_token, _ = self._extract_text_token(tts_text)
         model_input = {'text': tts_text_token,
                        'prompt_text': self.spk2info[spk_id]['prompt_text_token'],
