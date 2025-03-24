@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from functools import partial
-from typing import Generator, Optional
+from typing import Generator, Optional, AsyncGenerator, Union
 import json
 import onnxruntime
 import torch
@@ -94,11 +94,22 @@ class CosyVoiceFrontEnd:
             logging.info('get tts_text generator, will return _extract_text_token_generator!')
             # NOTE add a dummy text_token_len for compatibility
             return self._extract_text_token_generator(text), torch.tensor([0], dtype=torch.int32)
+        elif isinstance(text, AsyncGenerator):
+            logging.info('get tts_text async generator, will return _async_extract_text_token_generator!')
+            # NOTE add a dummy text_token_len for compatibility
+            return self._async_extract_text_token_generator(text), torch.tensor([0], dtype=torch.int32)
         else:
             text_token = self.tokenizer.encode(text, allowed_special=self.allowed_special)
             text_token = torch.tensor([text_token], dtype=torch.int32)
             text_token_len = torch.tensor([text_token.shape[1]], dtype=torch.int32)
             return text_token, text_token_len
+
+    async def _async_extract_text_token_generator(self, text_generator):
+        async for text in text_generator:
+            text_token, _ = self._extract_text_token(text)
+            for i in range(text_token.shape[1]):
+                yield text_token[:, i: i + 1]
+
 
     def _extract_text_token_generator(self, text_generator):
         for text in text_generator:
@@ -139,6 +150,11 @@ class CosyVoiceFrontEnd:
         if isinstance(text, Generator):
             logging.info('get tts_text generator, will skip text_normalize!')
             return [text]
+        
+        if isinstance(text, AsyncGenerator):
+            logging.info('get tts_text async_generator, will skip text_normalize!')
+            return [text]
+
         if text_frontend is False:
             return [text] if split is True else text
         text = text.strip()
@@ -256,7 +272,7 @@ class CosyVoiceFrontEnd:
         )
         self.add_spk_info(spk_id, spk_info)
 
-    def add_spk_info(self, spk_id: str, spk_info: dict|SpeakerInfo):
+    def add_spk_info(self, spk_id: str, spk_info: Union[dict, SpeakerInfo]):
         if isinstance(spk_info, BaseModel):
             spk_info = spk_info.model_dump()
         self.spk2info[spk_id] = spk_info
