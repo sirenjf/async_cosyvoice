@@ -5,6 +5,7 @@ option go_package = "protos/";
 
 service CosyVoice{
   rpc Inference(Request) returns (stream Response) {}
+  rpc StreamInference(stream Request) returns (stream Response) {}
 }
 
 message Request {

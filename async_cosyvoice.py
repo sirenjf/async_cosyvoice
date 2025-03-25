@@ -75,7 +75,7 @@ class AsyncCosyVoice2:
             logging.info('synthesis text {}'.format(i))
             async for model_output in self.model.async_tts(**model_input, stream=stream, speed=speed):
                 speech_len = model_output['tts_speech'].shape[1] / self.sample_rate
-                logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
+                logging.info('yield speech len {}, rtf {}, time cost: {}'.format(speech_len, (time.time() - start_time) / speech_len, (time.time() - start_time)))
                 yield model_output
                 start_time = time.time()
 

@@ -17,7 +17,7 @@ import sys
 import asyncio
 from concurrent import futures
 import argparse
-from typing import AsyncGenerator, Callable, Tuple, AsyncIterator
+from typing import AsyncGenerator, Callable, Tuple, AsyncIterator, Union
 
 import torch
 
@@ -40,18 +40,37 @@ logging.basicConfig(level=logging.INFO,
 class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     def __init__(self, args):
         try:
-            self.cosyvoice = AsyncCosyVoice2(args.model_dir, load_jit=args.load_jit, load_trt=args.load_trt, fp16=args.fp16)
+            self.cosyvoice = AsyncCosyVoice2(args.model_dir, load_jit=args.load_jit, load_trt=args.load_trt,
+                                             fp16=args.fp16)
         except Exception as e:
             print('no valid model_type! just support AsyncCosyVoice2.')
             raise e
         logging.info('grpc service initialized')
 
+    def parse_request(self, request: cosyvoice_pb2.Request) -> str:
+        match request.WhichOneof('request_type'):
+            case 'sft_request':
+                return request.sft_request.tts_text
+            case 'zero_shot_request':
+                return request.zero_shot_request.tts_text
+            case 'cross_lingual_request':
+                return request.cross_lingual_request.tts_text
+            case 'instruct2_request':
+                return request.instruct2_request.tts_text
+            case 'instruct2_by_spk_id_request':
+                return request.instruct2_by_spk_id_request.tts_text
+            case 'zero_shot_by_spk_id_request':
+                return request.zero_shot_by_spk_id_request.tts_text
+            case _:
+                raise ValueError("Invalid request type")
+
     async def Inference(self, request: cosyvoice_pb2.Request, context: aio.ServicerContext) -> AsyncIterator[
         cosyvoice_pb2.Response]:
         """统一异步流式处理入口"""
         try:
+            text = self.parse_request(request)
             # 获取处理器和预处理后的参数
-            processor, processor_args = await self._prepare_processor(request)
+            processor, processor_args = await self._prepare_processor(request, text)
 
             # 通过通用处理器生成响应
             async for response in self._handle_generic(request, processor, processor_args):
@@ -64,12 +83,39 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                 details=f"Processing error: {str(e)}"
             )
 
-    async def _prepare_processor(self, request: cosyvoice_pb2.Request) -> Tuple[Callable, list]:
+    async def StreamInference(self, request_iterator, context: aio.ServicerContext) -> AsyncIterator[
+        cosyvoice_pb2.Response]:
+        """异步双工流式处理入口，请不要在第一个 request 中包含 tts_text"""
+        try:
+            async def text_generator(request_iterator):
+                async for request in request_iterator:
+                    yield self.parse_request(request)
+
+            try:
+                first_request = await request_iterator.__anext__()
+            except Exception as e:
+                return
+
+            text_gen = text_generator(request_iterator)
+            processor, processor_args = await self._prepare_processor(first_request, text_gen)
+
+            # 通过通用处理器生成响应
+            async for response in self._handle_generic(first_request, processor, processor_args):
+                yield response
+        except Exception as e:
+            logging.error(f"Request processing failed: {str(e)}", exc_info=True)
+            await context.abort(
+                code=grpc.StatusCode.INTERNAL,
+                details=f"Processing error: {str(e)}"
+            )
+
+    async def _prepare_processor(self, request: cosyvoice_pb2.Request, text: Union[str, AsyncGenerator]) -> Tuple[
+        Callable, list]:
         """预处理并返回处理器及其参数"""
         match request.WhichOneof('request_type'):
             case 'sft_request':
                 return self.cosyvoice.inference_sft, [
-                    request.sft_request.tts_text,
+                    text,
                     request.sft_request.spk_id,
                     request.stream,
                     request.speed,
@@ -81,7 +127,7 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                     request.zero_shot_request.prompt_audio
                 )
                 return self.cosyvoice.inference_zero_shot, [
-                    request.zero_shot_request.tts_text,
+                    text,
                     request.zero_shot_request.prompt_text,
                     prompt_audio,
                     request.stream,
@@ -94,7 +140,7 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                     request.cross_lingual_request.prompt_audio
                 )
                 return self.cosyvoice.inference_cross_lingual, [
-                    request.cross_lingual_request.tts_text,
+                    text,
                     prompt_audio,
                     request.stream,
                     request.speed,
@@ -106,7 +152,7 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                     request.instruct2_request.prompt_audio
                 )
                 return self.cosyvoice.inference_instruct2, [
-                    request.instruct2_request.tts_text,
+                    text,
                     request.instruct2_request.instruct_text,
                     prompt_audio,
                     request.stream,
@@ -115,7 +161,7 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                 ]
             case 'instruct2_by_spk_id_request':
                 return self.cosyvoice.inference_instruct2_by_spk_id, [
-                    request.instruct2_by_spk_id_request.tts_text,
+                    text,
                     request.instruct2_by_spk_id_request.instruct_text,
                     request.instruct2_by_spk_id_request.spk_id,
                     request.stream,
@@ -124,7 +170,7 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                 ]
             case 'zero_shot_by_spk_id_request':
                 return self.cosyvoice.inference_zero_shot_by_spk_id, [
-                    request.zero_shot_by_spk_id_request.tts_text,
+                    text,
                     request.zero_shot_by_spk_id_request.spk_id,
                     request.stream,
                     request.speed,
@@ -143,8 +189,9 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
         logging.debug(f"Processing with {processor.__name__}")
         if request.stream:
             # 每一帧当作一个独立的音频返回
-            assert request.format == "" or request.is_frame_independent, ("目前流式下，只支持每帧返回一个独立的音频文件(is_frame_independent must be True)，"+
-                                         "如果需要不同的数据格式，请使用request.format=None返回原始torch.Tensor数据在客户端处理。")
+            assert request.format == "" or request.is_frame_independent, (
+                        "目前流式下，只支持每帧返回一个独立的音频文件(is_frame_independent must be True)，" +
+                        "如果需要不同的数据格式，请使用request.format=None返回原始torch.Tensor数据在客户端处理。")
             if request.format == "" or request.is_frame_independent:
                 async for model_chunk in processor(*processor_args):
                     audio_bytes = await asyncio.to_thread(
@@ -172,7 +219,7 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
 
 async def serve(args):
     options = [
-        ('grpc.max_send_message_length', 100 * 1024 * 1024),     # 100M
+        ('grpc.max_send_message_length', 100 * 1024 * 1024),  # 100M
         ('grpc.max_receive_message_length', 100 * 1024 * 1024),
     ]
     server = aio.server(
