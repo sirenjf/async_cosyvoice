@@ -37,36 +37,6 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s %(levelname)s %(message)s')
 
 
-def tensor_to_pcm_bytes(
-        x: torch.Tensor,
-        bit_depth: int = 16,
-) -> bytes:
-    x = x.to(device='cuda')
-
-    # 确保输入张量是浮点类型且范围正确
-    assert x.dtype == torch.float32 or x.dtype == torch.float64, "输入张量应为浮点类型"
-    assert torch.abs(x).max() <= 1.0, "输入张量范围应在 [-1.0, 1.0] 内"
-
-    # 根据位深选择整数类型和最大值
-    dtype_map = {
-        8: (torch.int8, 127.0),
-        16: (torch.int16, 32767.0),
-        24: (torch.int32, 8388607.0),  # 24-bit 用 32-bit 容器
-        32: (torch.int32, 2147483647.0),
-    }
-    dtype, max_int = dtype_map[bit_depth]
-
-    # 反归一化到整数范围
-    x_int = (x * max_int).clamp(-max_int, max_int - 1).to(dtype)
-
-    # 调整形状为 [采样点数, 通道数]
-    x_int = x_int.permute(1, 0).contiguous()
-
-    # 转换为 NumPy 数组并提取字节流
-    pcm_bytes = x_int.cpu().numpy().tobytes()
-    return pcm_bytes
-
-
 class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     def __init__(self, args):
         try:
@@ -116,23 +86,28 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     async def StreamInference(self, request_iterator, context: aio.ServicerContext) -> AsyncIterator[
         cosyvoice_pb2.Response]:
         """异步双工流式处理入口，请不要在第一个 request 中包含 tts_text"""
-
-        async def text_generator(request_iterator):
-            async for request in request_iterator:
-                yield self.parse_request(request)
-
         try:
-            first_request = await request_iterator.__anext__()
+            async def text_generator(request_iterator):
+                async for request in request_iterator:
+                    yield self.parse_request(request)
+
+            try:
+                first_request = await request_iterator.__anext__()
+            except Exception as e:
+                return
+
+            text_gen = text_generator(request_iterator)
+            processor, processor_args = await self._prepare_processor(first_request, text_gen)
+
+            # 通过通用处理器生成响应
+            async for response in self._handle_generic(first_request, processor, processor_args):
+                yield response
         except Exception as e:
-            return
-
-        text_gen = text_generator(request_iterator)
-        processor, processor_args = await self._prepare_processor(first_request, text_gen)
-
-        # 通过通用处理器生成响应
-        async for response in self._handle_generic(first_request, processor, processor_args):
-            yield response
-
+            logging.error(f"Request processing failed: {str(e)}", exc_info=True)
+            await context.abort(
+                code=grpc.StatusCode.INTERNAL,
+                details=f"Processing error: {str(e)}"
+            )
 
     async def _prepare_processor(self, request: cosyvoice_pb2.Request, text: Union[str, AsyncGenerator]) -> Tuple[
         Callable, list]:
@@ -220,8 +195,8 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
             if request.format == "" or request.is_frame_independent:
                 async for model_chunk in processor(*processor_args):
                     audio_bytes = await asyncio.to_thread(
-                        tensor_to_pcm_bytes,
-                        model_chunk['tts_speech']
+                        convert_audio_tensor_to_bytes,
+                        model_chunk['tts_speech'], request.format
                     )
                     yield cosyvoice_pb2.Response(tts_audio=audio_bytes, format=request.format)
             # TODO: 需要在第一帧添加文件头信息，后续的帧直接返回音频数据
@@ -237,8 +212,8 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                     audio_data = model_chunk['tts_speech']
 
             audio_bytes = await asyncio.to_thread(
-                tensor_to_pcm_bytes,
-                audio_data
+                convert_audio_tensor_to_bytes,
+                audio_data, request.format
             )
             yield cosyvoice_pb2.Response(tts_audio=audio_bytes, format=request.format)
 

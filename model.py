@@ -16,7 +16,7 @@ import logging
 import os
 import queue
 import threading
-from typing import AsyncGenerator, Generator, List
+from typing import AsyncGenerator, Generator, List, Union
 import torch
 import numpy as np
 import time
@@ -42,7 +42,14 @@ from async_cosyvoice.config import ENGINE_ARGS, SAMPLING_PARAMS
 from async_cosyvoice.vllm_use_cosyvoice2_model import CosyVoice2Model as CosyVoice2LLM
 ModelRegistry.register_model("CosyVoice2Model", CosyVoice2LLM)
 
+class AsyncWrapper:
+    """将一个同步生成器包装为异步生成器"""
+    def __init__(self, obj):
+        self.obj = obj
 
+    async def __aiter__(self):
+        for item in self.obj:
+            yield item
 
 def tensor_to_list(tensor: torch.tensor):
     return tensor.view(-1).cpu().numpy().tolist()
@@ -177,7 +184,9 @@ class CosyVoice2Model:
         llm_prompt_speech_token = tensor_to_list(llm_prompt_speech_token)
 
         start_time = time.time()
-        if isinstance(text, AsyncGenerator):
+        if isinstance(text, Union[Generator,AsyncGenerator]):
+            if isinstance(text, Generator):
+                text = AsyncWrapper(text)
             last_tokens = []
             prompt_token_ids = [self.sos_eos_token_id]
             text_tokens_cache = prompt_text
@@ -213,48 +222,6 @@ class CosyVoice2Model:
                         self.tts_speech_token_dict[uuid].extend(need_add_tokens)
                         prompt_token_ids.extend(need_add_tokens)
 
-            prompt_token_ids += text_tokens_cache + [self.task_token_id]
-            async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561]):
-                if output.token_ids[-1] == 6561:
-                    need_add_tokens = output.token_ids[:-1]
-                else:
-                    need_add_tokens = output.token_ids
-                self.tts_speech_token_dict[uuid].extend(need_add_tokens)
-
-        elif isinstance(text, Generator):
-            last_tokens = []
-            prompt_token_ids = [self.sos_eos_token_id]
-            text_tokens_cache = prompt_text
-            for this_text in text:
-                this_text = tensor_to_list(this_text + torch.tensor(6564))
-                # text need tokens
-                text_tokens_cache += this_text
-                while len(llm_prompt_speech_token) != 0:
-                    if len(text_tokens_cache) >= self.mix_ratio[0]:
-                        text_input_token = text_tokens_cache[:self.mix_ratio[0]]
-                        speech_input_token = llm_prompt_speech_token[:self.mix_ratio[1]]
-                        prompt_token_ids += text_input_token + speech_input_token
-                        # reset the last cache
-                        text_tokens_cache = text_tokens_cache[self.mix_ratio[0]:]
-                        llm_prompt_speech_token = llm_prompt_speech_token[self.mix_ratio[1]:]
-                    else:
-                        break
-                if len(llm_prompt_speech_token) == 0:
-                    if (len(last_tokens) > 0 and last_tokens[-1] == 6563) or len(prompt_token_ids) == 1:
-                        if len(text_tokens_cache) >= self.mix_ratio[0]:
-                            text_tokens_temp = text_tokens_cache[:self.mix_ratio[0]]
-                            prompt_token_ids += text_tokens_temp
-                            text_tokens_cache = text_tokens_cache[self.mix_ratio[0]:]
-                        else:
-                            continue
-                    async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6563]):
-                        last_tokens = output.token_ids
-                        if last_tokens[-1] == 6563:
-                            need_add_tokens = last_tokens[:-1]
-                        else:
-                            need_add_tokens = last_tokens
-                        self.tts_speech_token_dict[uuid].extend(need_add_tokens)
-                        prompt_token_ids.extend(need_add_tokens)
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
             async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561]):
                 if output.token_ids[-1] == 6561:

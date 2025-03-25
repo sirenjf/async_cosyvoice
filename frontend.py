@@ -110,7 +110,6 @@ class CosyVoiceFrontEnd:
             for i in range(text_token.shape[1]):
                 yield text_token[:, i: i + 1]
 
-
     def _extract_text_token_generator(self, text_generator):
         for text in text_generator:
             text_token, _ = self._extract_text_token(text)
