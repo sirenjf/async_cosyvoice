@@ -15,12 +15,16 @@ target_dir = os.path.join(vllm_path, "model_executor", "models")
 target_file = os.path.join(target_dir, "cosyvoice2.py")
 
 # 复制模型文件
-source_file = "./vllm_use_cosyvoice2_model.py"
-if not os.path.exists(source_file):
-    raise FileNotFoundError(f"Source file {source_file} not found")
+file_path = os.path.abspath(__file__)
+print(f"Current file path: {file_path}")
 
-shutil.copy(source_file, target_file)
-print(f"Copied {source_file} to {target_file}")
+model_file = os.path.join(os.path.dirname(file_path), "vllm_use_cosyvoice2_model.py")
+
+if not os.path.exists(model_file):
+    raise FileNotFoundError(f"Source file {model_file} not found")
+
+shutil.copy(model_file, target_file)
+print(f"Copied {model_file} to {target_file}")
 
 # 修改registry.py文件
 registry_path = os.path.join(target_dir, "registry.py")
