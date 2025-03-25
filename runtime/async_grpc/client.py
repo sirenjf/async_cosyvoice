@@ -41,9 +41,14 @@ def load_wav(wav_path: str, target_sr: int) -> np.ndarray:
         logging.error(f"Error loading {wav_path}: {str(e)}")
         raise
 
-def convert_audio_bytes_to_ndarray(raw_audio: bytes) -> np.ndarray:
+def convert_audio_bytes_to_ndarray(raw_audio: bytes, format: str = None) -> np.ndarray:
     """字节转 numpy 数组"""
-    return np.frombuffer(raw_audio, dtype=np.float32).reshape(1, -1)
+    if not format:
+        return np.frombuffer(raw_audio, dtype=np.float32).reshape(1, -1)
+    elif format in {'pcm'}:
+        return np.frombuffer(raw_audio, dtype=np.int16).reshape(1, -1)
+    else:
+        raise ValueError(f"Unsupported format: {format}")
 
 def convert_audio_ndarray_to_bytes(array: np.ndarray) -> bytes:
     """numpy 数组转字节"""
@@ -51,6 +56,7 @@ def convert_audio_ndarray_to_bytes(array: np.ndarray) -> bytes:
 
 def construct_request(args, tts_text):
     request = cosyvoice_pb2.Request()
+    request.tts_text = tts_text
     request.stream = args.stream
     request.speed = args.speed
     request.text_frontend = args.text_frontend
@@ -61,38 +67,32 @@ def construct_request(args, tts_text):
     if args.mode == 'sft':
         logging.info('Constructing sft request')
         sft_request = request.sft_request
-        sft_request.tts_text = tts_text
         sft_request.spk_id = args.spk_id
     elif args.mode == 'zero_shot':
         logging.info('Constructing zero_shot request')
         zero_shot_request = request.zero_shot_request
-        zero_shot_request.tts_text = tts_text
         zero_shot_request.prompt_text = args.prompt_text
         prompt_speech = load_wav(args.prompt_wav, 16000)
         zero_shot_request.prompt_audio = convert_audio_ndarray_to_bytes(prompt_speech)
     elif args.mode == 'cross_lingual':
         logging.info('Constructing cross_lingual request')
         cross_lingual_request = request.cross_lingual_request
-        cross_lingual_request.tts_text = tts_text
         prompt_speech = load_wav(args.prompt_wav, 16000)
         cross_lingual_request.prompt_audio = convert_audio_ndarray_to_bytes(prompt_speech)
     elif args.mode == 'instruct2':
         logging.info('Constructing instruct request')
         instruct2_request = request.instruct2_request
-        instruct2_request.tts_text = tts_text
         instruct2_request.instruct_text = args.instruct_text
         prompt_speech = load_wav(args.prompt_wav, 16000)
         instruct2_request.prompt_audio = convert_audio_ndarray_to_bytes(prompt_speech)
     elif args.mode == 'instruct2_by_spk_id':
         logging.info('Constructing instruct2_by_spk_id request')
         instruct2_by_spk_id_request = request.instruct2_by_spk_id_request
-        instruct2_by_spk_id_request.tts_text = tts_text
         instruct2_by_spk_id_request.instruct_text = args.instruct_text
         instruct2_by_spk_id_request.spk_id = args.spk_id
     else:
         logging.info('Constructing zero_shot_by_spk_id request')
         zero_shot_by_spk_id_request = request.zero_shot_by_spk_id_request
-        zero_shot_by_spk_id_request.tts_text = tts_text
         zero_shot_by_spk_id_request.spk_id = args.spk_id
     return request
 
@@ -118,7 +118,9 @@ async def main(args):
                         if i > 5:
                             # 模拟流式输入，等待一定时间
                             time.sleep(0.01)
-                        yield construct_request(args, segment)
+                        request = cosyvoice_pb2.Request()
+                        request.tts_text = segment
+                        yield request
 
                 response_stream = stub.StreamInference(text_generator(args))
             else:
@@ -126,16 +128,15 @@ async def main(args):
                 response_stream = stub.Inference(request)
 
             async for response in response_stream:
-                if response.tts_audio:
-                    tts_audio += response.tts_audio
-                    logging.info(f'Received audio chunk {len(response.tts_audio)} bytes, chunk index: {chunk_index},' +
-                                 f'cost {time.time() - last_time:.3f}s  all cost {time.time() - start_time:.3f}s ')
-                    last_time = time.time()
-                    chunk_index += 1
+                tts_audio += response.tts_audio
+                logging.info(f'Received audio chunk {len(response.tts_audio)} bytes, chunk index: {chunk_index},' +
+                             f'cost {time.time() - last_time:.3f}s  all cost {time.time() - start_time:.3f}s ')
+                last_time = time.time()
+                chunk_index += 1
 
             # 音频后处理
-            if tts_audio:
-                tts_array = convert_audio_bytes_to_ndarray(tts_audio)
+            if args.format is None or args.format in {'', 'pcm'}:
+                tts_array = convert_audio_bytes_to_ndarray(tts_audio, args.format)
                 # 保存为 (samples, 1) 格式
                 sf.write(
                     args.output_path,
@@ -146,7 +147,7 @@ async def main(args):
                 logging.info(f'Audio saved to {args.output_path} (duration: {duration:.2f}s) '+
                              f'cost {time.time() - last_time:.3f}s  all cost {time.time() - start_time:.3f}s ')
             else:
-                logging.warning('Received empty audio response')
+                logging.error(f"Unsupported format: {args.format}")
 
         except grpc.RpcError as e:
             logging.error(f"RPC error occurred: {e.code()}: {e.details()}")
@@ -170,8 +171,8 @@ if __name__ == "__main__":
     parser.add_argument('--spk_id', type=str, default='001')
     parser.add_argument('--prompt_text', type=str, default='希望你以后能够做的比我还好呦。')
     parser.add_argument('--prompt_wav', type=str, default='../../../asset/zero_shot_prompt.wav')
-    parser.add_argument('--format', type=str, choices=['', 'mp3', 'wav', 'pcm'],
-                        default='', help='音频输出格式[mp3, wav, pcm]，pcm可用于流式输出，目前测试客户端只支持对原始float32格式的音频数据处理，其他格式需自行实现转换')
+    parser.add_argument('--format', type=str, choices=['', 'pcm'],
+                        default='', help='音频输出格式[mp3, wav, pcm]，pcm可用于流式输出，目前测试客户端只支持对【 原始float32格式、Int16位pcm格式】 的音频数据处理，其他格式需自行实现转换')
     parser.add_argument('--instruct_text', type=str, default='使用四川话说')
     parser.add_argument('--output_path', type=str, default='demo.wav', help='输出音频的文件名')
     parser.add_argument('--target_sr', type=int, default=24000, help='输出音频的目标采样率 cosyvoice2 为 24000')
@@ -180,5 +181,4 @@ if __name__ == "__main__":
     # 运行异步主函数
     asyncio.run(main(args))
 
-    # python client.py --mode zero_shot_by_spk_id --spk_id 001 --stream_input --tts_text 你好，请问有什么可以帮您的吗？\
-    # --format pcm --stream
+    # python client.py --mode zero_shot_by_spk_id --spk_id 001 --stream_input --tts_text 你好，请问有什么可以帮您的吗？ --format "" --stream

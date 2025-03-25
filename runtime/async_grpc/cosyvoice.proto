@@ -3,70 +3,57 @@ syntax = "proto3";
 package cosyvoice;
 option go_package = "protos/";
 
-service CosyVoice{
+service CosyVoice {
   rpc Inference(Request) returns (stream Response) {}
   rpc StreamInference(stream Request) returns (stream Response) {}
 }
 
 message Request {
-  // 公共参数
-  bool stream = 1;          // 流式输出控制
-  float speed = 2;          // 速度控制
-  bool text_frontend = 3;   // 是否启用文本前端处理
+  string tts_text = 1;      // 要合成的文本内容
+  bool text_frontend = 2;   // 文本前端处理
+  bool stream = 3;          // 流式输出控制
+  float speed = 4;          // 速度控制
+  string format = 5;        // 输出音频格式
 
-  // oneof RequestPayload {
+  // 模式参数 (第一次请求时必需，后续流请求可省略)
   oneof request_type {
-    sftRequest sft_request = 4;
-    zeroshotRequest zero_shot_request = 5;
-    crosslingualRequest cross_lingual_request = 6;
-    instruct2Request instruct2_request = 7;
-    instruct2BySpkIdRequest instruct2_by_spk_id_request = 8;
-    zeroshotBySpkIdRequest zero_shot_by_spk_id_request = 9;
+    sftRequest sft_request = 6;
+    zeroshotRequest zero_shot_request = 7;
+    crosslingualRequest cross_lingual_request = 8;
+    instruct2Request instruct2_request = 9;
+    zeroshotBySpkIdRequest zero_shot_by_spk_id_request = 10;
+    instruct2BySpkIdRequest instruct2_by_spk_id_request = 11;
   }
-  string format = 20;                // 输出音频格式
-  bool is_frame_independent = 21;    // stream时，每一帧是否当作一个独立的音频返回，目前只支持true
 }
 
-message sftRequest{
-  string tts_text = 1;
-  string spk_id = 2;
+message sftRequest {
+  string spk_id = 1;
 }
 
-message zeroshotRequest{
-  string tts_text = 1;
-  string prompt_text = 2;
-  bytes prompt_audio = 3;
-}
-
-message crosslingualRequest{
-  string tts_text = 1;
+message zeroshotRequest {
+  string prompt_text = 1;
   bytes prompt_audio = 2;
 }
 
-message instruct2Request{
-  string tts_text = 1;
-  string instruct_text = 2;
-  bytes prompt_audio = 3;
+message crosslingualRequest {
+  bytes prompt_audio = 1;
 }
 
-message instructRequest{
-  string tts_text = 1;
-  string instruct_text = 2;
-  string spk_id = 3;
+message instruct2Request {
+  string instruct_text = 1;
+  bytes prompt_audio = 2;
 }
 
-message instruct2BySpkIdRequest{
-  string tts_text = 1;
-  string instruct_text = 2;
-  string spk_id = 3;
+message zeroshotBySpkIdRequest {
+  string spk_id = 1;
 }
 
-message zeroshotBySpkIdRequest{
-  string tts_text = 1;
+message instruct2BySpkIdRequest {
+  string instruct_text = 1;
   string spk_id = 2;
 }
 
-message Response{
+message Response {
   bytes tts_audio = 1;
   string format = 2;
 }

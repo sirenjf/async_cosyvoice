@@ -47,30 +47,12 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
             raise e
         logging.info('grpc service initialized')
 
-    def parse_request(self, request: cosyvoice_pb2.Request) -> str:
-        match request.WhichOneof('request_type'):
-            case 'sft_request':
-                return request.sft_request.tts_text
-            case 'zero_shot_request':
-                return request.zero_shot_request.tts_text
-            case 'cross_lingual_request':
-                return request.cross_lingual_request.tts_text
-            case 'instruct2_request':
-                return request.instruct2_request.tts_text
-            case 'instruct2_by_spk_id_request':
-                return request.instruct2_by_spk_id_request.tts_text
-            case 'zero_shot_by_spk_id_request':
-                return request.zero_shot_by_spk_id_request.tts_text
-            case _:
-                raise ValueError("Invalid request type")
-
     async def Inference(self, request: cosyvoice_pb2.Request, context: aio.ServicerContext) -> AsyncIterator[
         cosyvoice_pb2.Response]:
         """统一异步流式处理入口"""
         try:
-            text = self.parse_request(request)
             # 获取处理器和预处理后的参数
-            processor, processor_args = await self._prepare_processor(request, text)
+            processor, processor_args = await self._prepare_processor(request, request.tts_text)
 
             # 通过通用处理器生成响应
             async for response in self._handle_generic(request, processor, processor_args):
@@ -89,13 +71,14 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
         try:
             async def text_generator(request_iterator):
                 async for request in request_iterator:
-                    yield self.parse_request(request)
+                    yield request.tts_text
 
             try:
+                # 使用第一个 request 中的参数，构建处理器参数
                 first_request = await request_iterator.__anext__()
             except Exception as e:
                 return
-
+            # 从后续的请求中 构建 text_gen
             text_gen = text_generator(request_iterator)
             processor, processor_args = await self._prepare_processor(first_request, text_gen)
 
@@ -189,10 +172,10 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
         logging.debug(f"Processing with {processor.__name__}")
         if request.stream:
             # 每一帧当作一个独立的音频返回
-            assert request.format == "" or request.is_frame_independent, (
+            assert request.format in {"", "pcm"}, (
                         "目前流式下，只支持每帧返回一个独立的音频文件(is_frame_independent must be True)，" +
                         "如果需要不同的数据格式，请使用request.format=None返回原始torch.Tensor数据在客户端处理。")
-            if request.format == "" or request.is_frame_independent:
+            if request.format in {"", "pcm"}:
                 async for model_chunk in processor(*processor_args):
                     audio_bytes = await asyncio.to_thread(
                         convert_audio_tensor_to_bytes,
