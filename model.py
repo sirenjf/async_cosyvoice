@@ -38,7 +38,7 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.sampling_params import SamplingParams
 
 from vllm import ModelRegistry
-from async_cosyvoice.config import ENGINE_ARGS, SAMPLING_PARAMS
+from async_cosyvoice.config import ENGINE_ARGS, SAMPLING_PARAMS, ESTIMATOR_COUNT
 
 from async_cosyvoice.vllm_use_cosyvoice2_model import CosyVoice2Model as CosyVoice2LLM
 ModelRegistry.register_model("CosyVoice2Model", CosyVoice2LLM)
@@ -148,16 +148,7 @@ class CosyVoice2Model:
             self.flow.decoder.estimator_engine = trt.Runtime(trt.Logger(trt.Logger.INFO)).deserialize_cuda_engine(f.read())
         if self.flow.decoder.estimator_engine is None:
             raise ValueError('failed to load trt {}'.format(flow_decoder_estimator_model))
-        self.flow.decoder.estimator = EstimatorWrapper(self.flow.decoder.estimator_engine, estimator_count=2)
-        # TODO: 如何限制内存
-        # 启动后会占用较多显存
-        # [TRT] [I] Loaded engine size: 158 MiB
-        # [TRT] [I] [MS] Running engine with multi stream info
-        # [TRT] [I] [MS] Number of aux streams is 1
-        # [TRT] [I] [MS] Number of total worker streams is 2
-        # [TRT] [I] [MS] The main stream provided by execute/enqueue calls is the first worker stream
-        # [TRT] [I] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +4545, now: CPU 0, GPU 4681 (MiB)
-        # 该代码无法正常执行 self.flow.decoder.estimator.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)   # 1GB
+        self.flow.decoder.estimator = EstimatorWrapper(self.flow.decoder.estimator_engine, estimator_count=ESTIMATOR_COUNT)
 
     async def background_llm_inference(self, out_queue, prompt_token_ids, request_id, stop_token_ids, max_tokens):
         sampling_params = SamplingParams(**SAMPLING_PARAMS)

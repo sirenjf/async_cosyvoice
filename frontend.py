@@ -29,6 +29,8 @@ import torchaudio.compliance.kaldi as kaldi
 
 from pydantic import BaseModel, ConfigDict
 
+from async_cosyvoice.config import OVERWRITE_NORMALIZER_CACHE
+
 try:
     import ttsfrd
     use_ttsfrd = True
@@ -208,7 +210,7 @@ class CosyVoiceFrontEnd:
             self.frd.set_lang_type('pinyinvg')
         else:
             # self.zh_tn_model = ZhNormalizer(remove_erhua=False, full_to_half=False, overwrite_cache=True)
-            self.zh_tn_model = ZhNormalizer(remove_erhua=False, full_to_half=False, overwrite_cache=False)
+            self.zh_tn_model = ZhNormalizer(remove_erhua=False, full_to_half=False, overwrite_cache=OVERWRITE_NORMALIZER_CACHE)
             self.en_tn_model = EnNormalizer()
             self.inflect_parser = inflect.engine()
 
