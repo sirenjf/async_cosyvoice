@@ -11,21 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import json
 import os
 import re
-from collections import OrderedDict
-from functools import partial
-from typing import Callable
-from typing import Generator, Optional, AsyncGenerator, Union
-
+import json
 import inflect
-import numpy as np
+from functools import partial
+from collections import OrderedDict
+from typing import Generator, Optional, AsyncGenerator, Union, Callable
+
+import librosa
 import onnxruntime
 import torch
+import numpy as np
+import whisper
 import torchaudio
 import torchaudio.compliance.kaldi as kaldi
-import whisper
+
 from pydantic import BaseModel, ConfigDict
 
 try:
@@ -270,17 +271,16 @@ class CosyVoiceFrontEnd:
     def text_normalize(self, text, split=True, text_frontend=True):
         if isinstance(text, Union[Generator, AsyncGenerator]):
             logging.info('get tts_text generator, will skip text_normalize!')
-
-            text_generator = AsyncTextGeneratorWrpper(text)
-            while True:
-                if text_generator.finish:
-                    return
-                yield text_generator
+            def _text_generator():
+                text_generator = AsyncTextGeneratorWrpper(text)
+                while True:
+                    if text_generator.finish:
+                        return
+                    yield text_generator
+            return _text_generator()
 
         if text_frontend is False:
-            yield text
-            return
-            # return [text] if split is True else text
+            return [text] if split is True else text
 
         text = text.strip()
         if self.use_ttsfrd:
@@ -308,9 +308,7 @@ class CosyVoiceFrontEnd:
                 texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
                                              token_min_n=60, merge_len=20, comma_split=False))
         texts = [i for i in texts if not is_only_punctuation(i)]
-        for it in texts:
-            yield it
-        # return texts if split is True else text
+        return texts if split is True else text
 
     def frontend_sft(self, tts_text, spk_id):
         tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
