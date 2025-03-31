@@ -11,20 +11,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from functools import partial
-from collections import OrderedDict
-from typing import Generator, Optional, AsyncGenerator, Union
 import json
-import onnxruntime
-import torch
-import numpy as np
-import whisper
-from typing import Callable
-import torchaudio.compliance.kaldi as kaldi
-import torchaudio
 import os
 import re
+from collections import OrderedDict
+from functools import partial
+from typing import Callable
+from typing import Generator, Optional, AsyncGenerator, Union
+
 import inflect
+import numpy as np
+import onnxruntime
+import torch
+import torchaudio
+import torchaudio.compliance.kaldi as kaldi
+import whisper
 from pydantic import BaseModel, ConfigDict
 
 try:
@@ -37,6 +38,101 @@ except ImportError:
     use_ttsfrd = False
 from cosyvoice.utils.file_utils import logging
 from cosyvoice.utils.frontend_utils import contains_chinese, replace_blank, replace_corner_mark, remove_bracket, spell_out_number, split_paragraph, is_only_punctuation
+
+
+class AsyncTextGeneratorWrpper:
+    def __init__(self, obj):
+        self.obj = obj
+        self.finish = False
+        self.history_str = ""  # 这部分记录所有迭代器已经计算了的
+        self.history_str_len = 0
+        self.cache_str = ""  # 这部分记录的是还没有计算的
+        self.cache_str_len = 0
+        self.this_history = ""  # 这部分记录的是当前迭代器已经计算了的
+        self.this_history_len = 0
+        self.is_async_generator = isinstance(obj, AsyncGenerator)
+
+    async def __aiter__(self):
+        while True:
+            try:
+                if self.cache_str_len >= 512:
+                    this_str = ""
+                    this_str_len = 0
+                else:
+                    if self.is_async_generator:
+                        this_str = await self.obj.__anext__()
+                    else:
+                        this_str = self.obj.__next__()
+                    this_str_len = len(this_str)
+
+                self.cache_str += this_str
+                self.cache_str_len += this_str_len
+
+                """
+                需要考虑对中文、英文、日文字符串进行流式的句子切分，需要确保当前返回的句子加上 self.this_history 的长度不能超过 512，并且当长度大于 128 时，就需要尽可能的根据标点符号进行切割。
+                """
+
+                if self.this_history_len + self.cache_str_len > 128:  # 当长度大于 128 时，尽可能的选择在标点符号的位置进行切割。
+                    max_split_len = 512 - self.this_history_len
+                    max_pos = min(self.cache_str_len, max_split_len)
+                    split_pos = -1
+                    split_chars = {'。', '！', '？', '.', '!', '?', '，', '、', '；', ';', ','}
+
+                    # 从后往前找标点符号
+                    for i in range(max_pos, 0, -1):
+                        if self.cache_str[i - 1] in split_chars:
+                            split_pos = i
+                            break
+
+                    if split_pos > 0:
+                        yield_str = self.cache_str[:split_pos]
+
+                        # 更新变量
+                        self.history_str += yield_str
+                        self.history_str_len += split_pos
+
+                        logging.debug(f"this history sentence: {self.this_history}")
+
+                        self.this_history = ""
+                        self.this_history_len = 0
+
+                        self.cache_str = self.cache_str[split_pos:]
+                        self.cache_str_len = len(self.cache_str)
+
+                        yield yield_str
+
+                        return
+
+                if self.this_history_len + self.cache_str_len > 512:  # 这里改为分句逻辑，流式的根据 this_history 进行句子切分，当长度大于 512 时，强制截断到 512 长度
+
+                    need_str_len = 512 - self.this_history_len
+                    yield self.cache_str[:need_str_len]
+                    self.history_str += self.cache_str[:need_str_len]
+                    self.history_str_len += need_str_len
+
+                    self.cache_str = self.cache_str[need_str_len:]
+                    self.cache_str_len = len(self.cache_str)
+
+                    logging.debug(f"this history sentence: {self.this_history}")
+                    self.this_history_len = 0
+                    self.this_history = ""
+                    return
+
+                yield self.cache_str
+                self.history_str += self.cache_str
+                self.history_str_len += self.cache_str_len
+                self.this_history += self.cache_str
+                self.this_history_len += self.cache_str_len
+                self.cache_str = ""
+                self.cache_str_len = 0
+
+            except StopIteration:
+                self.finish = True
+                return
+            except StopAsyncIteration:
+                self.finish = True
+                return
+
 
 
 class SpeakerInfo(BaseModel):
@@ -120,7 +216,7 @@ class CosyVoiceFrontEnd:
             logging.info('get tts_text generator, will return _extract_text_token_generator!')
             # NOTE add a dummy text_token_len for compatibility
             return self._extract_text_token_generator(text), torch.tensor([0], dtype=torch.int32)
-        elif isinstance(text, AsyncGenerator):
+        elif isinstance(text, Union[AsyncGenerator, AsyncTextGeneratorWrpper]):
             logging.info('get tts_text async generator, will return _async_extract_text_token_generator!')
             # NOTE add a dummy text_token_len for compatibility
             return self._async_extract_text_token_generator(text), torch.tensor([0], dtype=torch.int32)
@@ -174,9 +270,18 @@ class CosyVoiceFrontEnd:
     def text_normalize(self, text, split=True, text_frontend=True):
         if isinstance(text, Union[Generator, AsyncGenerator]):
             logging.info('get tts_text generator, will skip text_normalize!')
-            return [text]
+
+            text_generator = AsyncTextGeneratorWrpper(text)
+            while True:
+                if text_generator.finish:
+                    return
+                yield text_generator
+
         if text_frontend is False:
-            return [text] if split is True else text
+            yield text
+            return
+            # return [text] if split is True else text
+
         text = text.strip()
         if self.use_ttsfrd:
             texts = [i["text"] for i in json.loads(self.frd.do_voicegen_frd(text))["sentences"]]
@@ -203,7 +308,9 @@ class CosyVoiceFrontEnd:
                 texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
                                              token_min_n=60, merge_len=20, comma_split=False))
         texts = [i for i in texts if not is_only_punctuation(i)]
-        return texts if split is True else text
+        for it in texts:
+            yield it
+        # return texts if split is True else text
 
     def frontend_sft(self, tts_text, spk_id):
         tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
