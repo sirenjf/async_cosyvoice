@@ -43,100 +43,103 @@ from cosyvoice.utils.file_utils import logging
 from cosyvoice.utils.frontend_utils import contains_chinese, replace_blank, replace_corner_mark, remove_bracket, spell_out_number, split_paragraph, is_only_punctuation
 
 
-class AsyncTextGeneratorWrpper:
+class AsyncTextGeneratorWrapper:
     def __init__(self, obj):
         self.obj = obj
-        self.finish = False
-        self.history_str = ""  # 这部分记录所有迭代器已经计算了的
-        self.history_str_len = 0
-        self.cache_str = ""  # 这部分记录的是还没有计算的
-        self.cache_str_len = 0
-        self.this_history = ""  # 这部分记录的是当前迭代器已经计算了的
-        self.this_history_len = 0
         self.is_async_generator = isinstance(obj, AsyncGenerator)
+        self.str_num = 0
+        self.min_str_num = 60
+        self.split_threshold = 60
+        self.buffer = ""  # 用于存储未发送的文本
+        self.finished = False
+        self._len = 1
 
-    async def __aiter__(self):
-        while True:
-            try:
-                if self.cache_str_len >= 512:
-                    this_str = ""
-                    this_str_len = 0
-                else:
-                    if self.is_async_generator:
-                        this_str = await self.obj.__anext__()
-                    else:
-                        this_str = self.obj.__next__()
-                    this_str_len = len(this_str)
+    def __len__(self):
+        return self._len
 
-                self.cache_str += this_str
-                self.cache_str_len += this_str_len
+    def _find_split_point(self, text, max_split_len=None):
+        if max_split_len is None:
+            max_split_len = self.split_threshold
+        """在文本中找到合适的分割点"""
+        split_chars = {'。', '！', '？', '.', '!', '?', '，', '、', '；', ';', ','}
+        for i, t in enumerate(text):
+            if t in split_chars:
+                return i
+            elif i >= max_split_len:
+                # 如果超过最大分割长度，则返回当前位置，强制分隔
+                return i
+        return -1
 
-                """
-                需要考虑对中文、英文、日文字符串进行流式的句子切分，需要确保当前返回的句子加上 self.this_history 的长度不能超过 512，并且当长度大于 128 时，就需要尽可能的根据标点符号进行切割。
-                """
-
-                if self.this_history_len + self.cache_str_len > 128:  # 当长度大于 128 时，尽可能的选择在标点符号的位置进行切割。
-                    max_split_len = 512 - self.this_history_len
-                    max_pos = min(self.cache_str_len, max_split_len)
-                    split_pos = -1
-                    split_chars = {'。', '！', '？', '.', '!', '?', '，', '、', '；', ';', ','}
-
-                    # 从后往前找标点符号
-                    for i in range(max_pos, 0, -1):
-                        if self.cache_str[i - 1] in split_chars:
-                            split_pos = i
-                            break
-
-                    if split_pos > 0:
-                        yield_str = self.cache_str[:split_pos]
-
-                        # 更新变量
-                        self.history_str += yield_str
-                        self.history_str_len += split_pos
-
-                        logging.debug(f"this history sentence: {self.this_history}")
-
-                        self.this_history = ""
-                        self.this_history_len = 0
-
-                        self.cache_str = self.cache_str[split_pos:]
-                        self.cache_str_len = len(self.cache_str)
-
-                        yield yield_str
-
-                        return
-
-                if self.this_history_len + self.cache_str_len > 512:  # 这里改为分句逻辑，流式的根据 this_history 进行句子切分，当长度大于 512 时，强制截断到 512 长度
-
-                    need_str_len = 512 - self.this_history_len
-                    yield self.cache_str[:need_str_len]
-                    self.history_str += self.cache_str[:need_str_len]
-                    self.history_str_len += need_str_len
-
-                    self.cache_str = self.cache_str[need_str_len:]
-                    self.cache_str_len = len(self.cache_str)
-
-                    logging.debug(f"this history sentence: {self.this_history}")
-                    self.this_history_len = 0
-                    self.this_history = ""
+    async def _async_generator(self):
+        """异步生成器，处理文本分块"""
+        self.str_num = 0
+        # 发送缓冲区数据
+        if self.buffer:
+            if len(self.buffer) >= self.min_str_num:
+                yield self.buffer[:self.min_str_num]
+                self.str_num = self.min_str_num
+                self.buffer = self.buffer[self.min_str_num:]
+                # 在 buffer 中寻找合适的切分点
+                split_pos = self._find_split_point(self.buffer)
+                if split_pos >= 0:
+                    yield self.buffer[:split_pos]
+                    self.buffer = self.buffer[split_pos:]
                     return
+                else:
+                    yield self.buffer
+                    self.str_num += len(self.buffer)
+                    self.buffer = ""
+            else:
+                yield self.buffer
+                self.str_num = len(self.buffer)
+                self.buffer = ""
+        chunk = ""
+        while True:
+            # 获取新数据
+            next_chunk :str = ""
+            try:
+                if self.is_async_generator:
+                    next_chunk = await self.obj.__anext__()
+                else:
+                    next_chunk = self.obj.__next__()
+            except (StopIteration, StopAsyncIteration):
+                self.finished = True
+            except Exception as e:
+                raise f"Error in AsyncTextGeneratorWrapper: {e}"
 
-                yield self.cache_str
-                self.history_str += self.cache_str
-                self.history_str_len += self.cache_str_len
-                self.this_history += self.cache_str
-                self.this_history_len += self.cache_str_len
-                self.cache_str = ""
-                self.cache_str_len = 0
+            if not self.finished:
+                # 如果新数据长度小于最小长度，则直接返回
+                if (num := self.str_num + len(chunk)) < self.min_str_num:
+                    self.str_num = num
+                    yield chunk
+                # 确保切分后还没有结束传入新的字符，避免出现生成器只生成一个空字符的情况（合成错误音频）
+                # 切分输入，并保存更新 buffer
+                elif split_pos := self._find_split_point(chunk) >= 0:
+                    yield chunk[:split_pos]
+                    self.buffer = chunk[split_pos:] + next_chunk
+                    return
+                # 如果长度超过最小长度+阈值，则强制进行切分
+                elif num > self.min_str_num + self.split_threshold:
+                    index = self.min_str_num + self.split_threshold - self.str_num
+                    yield chunk[:index]
+                    self.buffer = chunk[index:] + next_chunk
+                    return
+                else:
+                    self.str_num = num
+                    yield chunk
 
-            except StopIteration:
-                self.finish = True
+                chunk = next_chunk
+            else:
+                # 如果已经结束，则直接返回剩余的 buffer
+                yield self.buffer + chunk
                 return
-            except StopAsyncIteration:
-                self.finish = True
-                return
 
-
+    def __iter__(self):
+        """同步生成器"""
+        while not self.finished:
+            # 返回异步生成器
+            yield self._async_generator()
+            # self._len += 1
 
 class SpeakerInfo(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -219,7 +222,7 @@ class CosyVoiceFrontEnd:
             logging.info('get tts_text generator, will return _extract_text_token_generator!')
             # NOTE add a dummy text_token_len for compatibility
             return self._extract_text_token_generator(text), torch.tensor([0], dtype=torch.int32)
-        elif isinstance(text, Union[AsyncGenerator, AsyncTextGeneratorWrpper]):
+        elif isinstance(text, Union[AsyncGenerator, AsyncTextGeneratorWrapper]):
             logging.info('get tts_text async generator, will return _async_extract_text_token_generator!')
             # NOTE add a dummy text_token_len for compatibility
             return self._async_extract_text_token_generator(text), torch.tensor([0], dtype=torch.int32)
@@ -273,13 +276,7 @@ class CosyVoiceFrontEnd:
     def text_normalize(self, text, split=True, text_frontend=True):
         if isinstance(text, Union[Generator, AsyncGenerator]):
             logging.info('get tts_text generator, will skip text_normalize!')
-            def _text_generator():
-                text_generator = AsyncTextGeneratorWrpper(text)
-                while True:
-                    if text_generator.finish:
-                        return
-                    yield text_generator
-            return _text_generator()
+            return AsyncTextGeneratorWrapper(text)
 
         if text_frontend is False:
             return [text] if split is True else text
