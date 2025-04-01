@@ -14,6 +14,7 @@
 import os
 import time
 from typing import Generator, Union, AsyncGenerator
+os.environ["VLLM_USE_V1"] = '1'
 
 import torch
 from async_cosyvoice.frontend import CosyVoiceFrontEnd
