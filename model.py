@@ -214,8 +214,9 @@ class CosyVoice2Model:
                             continue
                     async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6563]):
                         last_tokens = output.token_ids
-                        if last_tokens[-1] == 6563:
-                            need_add_tokens = last_tokens[:-1]
+                        if last_tokens[-1] >= 6561:
+                            # need_add_tokens = last_tokens[:-1]
+                            continue
                         else:
                             need_add_tokens = last_tokens
                         self.tts_speech_token_dict[uuid].extend(need_add_tokens)
@@ -223,8 +224,8 @@ class CosyVoice2Model:
 
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
             async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561]):
-                if output.token_ids[-1] == 6561:
-                    need_add_tokens = output.token_ids[:-1]
+                if output.token_ids[-1] >= 6561:
+                    continue
                 else:
                     need_add_tokens = output.token_ids
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
@@ -239,8 +240,8 @@ class CosyVoice2Model:
                     stop_token_ids=[6561],
                     max_tokens=max_tokens,
             ):
-                if output.token_ids[-1] == 6561:
-                    need_add_tokens = output.token_ids[:-1]
+                if output.token_ids[-1] >= 6561:
+                    continue
                 else:
                     need_add_tokens = output.token_ids
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
