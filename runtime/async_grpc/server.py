@@ -26,6 +26,7 @@ import cosyvoice_pb2_grpc
 import logging
 import grpc
 from grpc import aio
+import torchaudio
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f'{ROOT_DIR}/../../..')
@@ -46,6 +47,23 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
             print('no valid model_type! just support AsyncCosyVoice2.')
             raise e
         logging.info('grpc service initialized')
+
+    async def RegisterSpk(self, request: cosyvoice_pb2.RegisterSpkRequest, context: aio.ServicerContext) -> cosyvoice_pb2.RegisterSpkResponse:
+        try:
+            logging.info(f"RegisterSpk request: {request.spk_id}")
+
+            audio_bytes = await asyncio.to_thread(
+                convert_audio_bytes_to_tensor,
+                request.prompt_audio_bytes
+            )
+            if request.ori_sample_rate != 16000:
+                audio_bytes = torchaudio.functional.resample(audio_bytes, request.ori_sample_rate, 16000)
+
+            self.cosyvoice.frontend.generate_spk_info(request.spk_id, request.prompt_text, audio_bytes)
+            return cosyvoice_pb2.RegisterSpkResponse(status=cosyvoice_pb2.RegisterSpkResponse.Status.OK, registered_spk_id=request.spk_id)
+        except Exception as e:
+            logging.error(f"RegisterSpk failed: {str(e)}", exc_info=True)
+            return cosyvoice_pb2.RegisterSpkResponse(status=cosyvoice_pb2.RegisterSpkResponse.Status.FAILED)
 
     async def Inference(self, request: cosyvoice_pb2.Request, context: aio.ServicerContext) -> AsyncIterator[
         cosyvoice_pb2.Response]:
@@ -189,16 +207,12 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
             # 服务端合并音频数据后，再编码返回一个完整的音频文件
             audio_data: torch.Tensor = None
             async for model_chunk in processor(*processor_args):
-                if audio_data is not None:
-                    audio_data = torch.concat([audio_data, model_chunk['tts_speech']], dim=1)
-                else:
-                    audio_data = model_chunk['tts_speech']
+                audio_bytes = await asyncio.to_thread(
+                    convert_audio_tensor_to_bytes,
+                    model_chunk['tts_speech'], request.format
+                )
+                yield cosyvoice_pb2.Response(tts_audio=audio_bytes, format=request.format)
 
-            audio_bytes = await asyncio.to_thread(
-                convert_audio_tensor_to_bytes,
-                audio_data, request.format
-            )
-            yield cosyvoice_pb2.Response(tts_audio=audio_bytes, format=request.format)
 
 async def serve(args):
     options = [

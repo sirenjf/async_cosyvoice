@@ -6,6 +6,7 @@ option go_package = "protos/";
 service CosyVoice {
   rpc Inference(Request) returns (stream Response) {}
   rpc StreamInference(stream Request) returns (stream Response) {}
+  rpc RegisterSpk(RegisterSpkRequest) returns (RegisterSpkResponse) {}
 }
 
 message Request {
@@ -56,4 +57,21 @@ message instruct2BySpkIdRequest {
 message Response {
   bytes tts_audio = 1;
   string format = 2;
+}
+
+message RegisterSpkRequest {
+  string spk_id = 1;
+  string prompt_text = 2;
+  bytes prompt_audio_bytes = 3;
+  int32 ori_sample_rate = 4;
+}
+
+message RegisterSpkResponse {
+  enum Status {
+    DEFAULT = 0;
+    OK = 1;
+    FAILED = 2;
+  }
+  Status status = 1;
+  string registered_spk_id = 2;
 }

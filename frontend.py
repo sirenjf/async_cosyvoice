@@ -48,8 +48,8 @@ class AsyncTextGeneratorWrapper:
         self.obj = obj
         self.is_async_generator = isinstance(obj, AsyncGenerator)
         self.str_num = 0
-        self.min_str_num = 60
-        self.split_threshold = 60
+        self.min_str_num = 30
+        self.split_threshold = 30
         self.buffer = ""  # 用于存储未发送的文本
         self.finished = False
         self._len = 1
@@ -175,6 +175,7 @@ class LRUCache(OrderedDict):
                 self.popitem(last=False)
         super().__setitem__(key, value)
 
+from async_cosyvoice.config import REGISTER_SPK_INFO_DICT
 
 class CosyVoiceFrontEnd:
 
@@ -191,16 +192,19 @@ class CosyVoiceFrontEnd:
         option = onnxruntime.SessionOptions()
         option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
         option.intra_op_num_threads = 1
-        self.campplus_session = onnxruntime.InferenceSession(campplus_model, sess_options=option, providers=["CPUExecutionProvider"])
+        self.campplus_session = onnxruntime.InferenceSession(campplus_model, sess_options=option, providers=["CUDAExecutionProvider" if torch.cuda.is_available() else
+                                                                                "CPUExecutionProvider"])
         self.speech_tokenizer_session = onnxruntime.InferenceSession(speech_tokenizer_model, sess_options=option,
                                                                      providers=["CUDAExecutionProvider" if torch.cuda.is_available() else
                                                                                 "CPUExecutionProvider"])
 
         self.spk2info = LRUCache(max_size=10000)
+
         if os.path.exists(spk2info):
             spk_infos = torch.load(spk2info, map_location=self.device, weights_only=False)
             for spk_id, info in spk_infos.items():
                 self.spk2info[spk_id] = info
+
         self.spk2info_path = os.path.join(os.path.dirname(os.path.abspath(spk2info)), 'spk2info')
         os.makedirs(self.spk2info_path, exist_ok=True)
         self.allowed_special = allowed_special
@@ -216,6 +220,21 @@ class CosyVoiceFrontEnd:
             self.zh_tn_model = ZhNormalizer(remove_erhua=False, full_to_half=False, overwrite_cache=OVERWRITE_NORMALIZER_CACHE)
             self.en_tn_model = EnNormalizer()
             self.inflect_parser = inflect.engine()
+
+        if REGISTER_SPK_INFO_DICT:
+            for spk_id, info in REGISTER_SPK_INFO_DICT.items():
+                prompt_text = info['prompt_text']
+                prompt_audio_path = info['prompt_audio_path']
+                if not os.path.exists(prompt_audio_path):
+                    logging.error(f"doesn't exist prompt_audio_path: {prompt_audio_path}")
+                    continue
+                logging.info(f"Generate spk_info for {spk_id}....")
+                prompt_audio, sr = torchaudio.load(prompt_audio_path)
+                prompt_audio = prompt_audio
+                if sr != 16000:
+                    prompt_audio = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)(prompt_audio)
+                self.generate_spk_info(spk_id, prompt_text, prompt_audio)
+                logging.info(f"Generate spk_info for {spk_id} success!")
 
     def _extract_text_token(self, text):
         if isinstance(text, Generator):
