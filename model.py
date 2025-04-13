@@ -152,7 +152,7 @@ class CosyVoice2Model:
 
     async def background_llm_inference(self, out_queue, prompt_token_ids, request_id, stop_token_ids, max_tokens):
         sampling_params = SamplingParams(**SAMPLING_PARAMS)
-        sampling_params.stop_token_ids = stop_token_ids or [6561]
+        sampling_params.stop_token_ids = stop_token_ids or [6561, 6563]
         if max_tokens:
             sampling_params.max_tokens = max_tokens
         async for output in self.llm_engine.generate(
@@ -215,17 +215,16 @@ class CosyVoice2Model:
                     async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6563]):
                         last_tokens = output.token_ids
                         if last_tokens[-1] >= 6561:
-                            # need_add_tokens = last_tokens[:-1]
-                            continue
+                            need_add_tokens = last_tokens[:-1]
                         else:
                             need_add_tokens = last_tokens
                         self.tts_speech_token_dict[uuid].extend(need_add_tokens)
                         prompt_token_ids.extend(need_add_tokens)
 
             prompt_token_ids += text_tokens_cache + [self.task_token_id]
-            async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561]):
+            async for output in self.llm_inference(prompt_token_ids, request_id=uuid, stop_token_ids=[6561, 6563]):
                 if output.token_ids[-1] >= 6561:
-                    continue
+                    need_add_tokens = last_tokens[:-1]
                 else:
                     need_add_tokens = output.token_ids
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)
@@ -237,11 +236,11 @@ class CosyVoice2Model:
             async for output in self.llm_inference(
                     prompt_token_ids,
                     request_id=uuid,
-                    stop_token_ids=[6561],
+                    stop_token_ids=[6561, 6563],
                     max_tokens=max_tokens,
             ):
                 if output.token_ids[-1] >= 6561:
-                    continue
+                    need_add_tokens = output.token_ids[:-1]
                 else:
                     need_add_tokens = output.token_ids
                 self.tts_speech_token_dict[uuid].extend(need_add_tokens)

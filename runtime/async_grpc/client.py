@@ -14,7 +14,6 @@ import argparse
 import cosyvoice_pb2
 import cosyvoice_pb2_grpc
 import grpc
-import torchaudio
 from grpc import aio
 
 logging.basicConfig(
@@ -189,8 +188,8 @@ def multiprocess_main(args):
 async def register_spk(args):
     async with aio.insecure_channel(f"{args.host}:{args.port}") as channel:
         stub = cosyvoice_pb2_grpc.CosyVoiceStub(channel)
-        audio_bytes, sr = torchaudio.load(args.prompt_wav)
-        audio_bytes = audio_bytes.numpy().tobytes()
+        audio_data = load_wav(args.prompt_wav, 16000)
+        audio_bytes, sr = convert_audio_ndarray_to_bytes(audio_data), 16000
         future = stub.RegisterSpk(cosyvoice_pb2.RegisterSpkRequest(spk_id=args.spk_id, prompt_text=args.prompt_text, prompt_audio_bytes=audio_bytes, ori_sample_rate=sr))
         response = await future
         logging.info(f"RegisterSpk response: {response}")
@@ -218,7 +217,7 @@ if __name__ == "__main__":
     parser.add_argument('--output_path', type=str, default='demo.wav', help='输出音频的文件名')
     parser.add_argument('--target_sr', type=int, default=24000, help='输出音频的目标采样率 cosyvoice2 为 24000')
     parser.add_argument('--max_conc', type=int, default=4, help='最大并发数')
-    parser.add_argument('--input_file', type=str, default='', help='输入文件路径')
+    parser.add_argument('--input_file', type=str, default='', help='输入需要合成音频文本的文件路径，单行文本为一个语音合成请求，将并发合成音频，并通过--max_conc设置并发数')
     args = parser.parse_args()
 
     if args.mode == 'register_spk':

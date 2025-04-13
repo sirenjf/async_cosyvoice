@@ -44,10 +44,12 @@ ESTIMATOR_COUNT = 4
 
 
 # 注册音色信息，用于frontend中生成音色信息, 请根据自己的实际情况进行使用
+# key 为 spk_id, value 为参考音频对应的文本、音频路径， 必填
+# 可以一次性注册多个音色信息，之前注册的音色信息，后续可以再次注册，将覆盖之前的音色信息
 REGISTER_SPK_INFO_DICT = {
-    "test_audio": {
-        "prompt_text": "",
-        "prompt_audio_path": "/mnt3/litaisong.lts/data/instruct_data/emotion/prompts/magic_data_prompt_wavs/G0435_0_S0008.wav", # 请尽量是16000Hz的音频，并以绝对路径提供
+    "new_spk_id": {
+        "prompt_text": "这是参考音频对应的文本",
+        "prompt_audio_path": "/home/none/test.wav", # 请尽量是16000Hz的音频，并以绝对路径提供
     }
 }
 

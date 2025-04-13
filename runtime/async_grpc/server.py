@@ -52,14 +52,14 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
         try:
             logging.info(f"RegisterSpk request: {request.spk_id}")
 
-            audio_bytes = await asyncio.to_thread(
+            audio_data = await asyncio.to_thread(
                 convert_audio_bytes_to_tensor,
                 request.prompt_audio_bytes
             )
             if request.ori_sample_rate != 16000:
-                audio_bytes = torchaudio.functional.resample(audio_bytes, request.ori_sample_rate, 16000)
+                audio_data = torchaudio.functional.resample(audio_data, request.ori_sample_rate, 16000)
 
-            self.cosyvoice.frontend.generate_spk_info(request.spk_id, request.prompt_text, audio_bytes)
+            self.cosyvoice.frontend.generate_spk_info(request.spk_id, request.prompt_text, audio_data, self.cosyvoice.sample_rate)
             return cosyvoice_pb2.RegisterSpkResponse(status=cosyvoice_pb2.RegisterSpkResponse.Status.OK, registered_spk_id=request.spk_id)
         except Exception as e:
             logging.error(f"RegisterSpk failed: {str(e)}", exc_info=True)
