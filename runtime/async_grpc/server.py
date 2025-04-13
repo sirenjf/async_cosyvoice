@@ -222,7 +222,7 @@ async def serve(args):
     server = aio.server(
         migration_thread_pool=futures.ThreadPoolExecutor(max_workers=args.max_conc),
         options=options,
-        maximum_concurrent_rpcs=args.max_conc
+        maximum_concurrent_rpcs=args.max_conc*10
     )
     cosyvoice_pb2_grpc.add_CosyVoiceServicer_to_server(CosyVoiceServiceImpl(args), server)
     server.add_insecure_port(f'0.0.0.0:{args.port}')
@@ -256,7 +256,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=50000)
-    parser.add_argument('--max_conc', type=int, default=4)
+    parser.add_argument('--max_conc', type=int, default=10)
     parser.add_argument('--model_dir', type=str,
                         default='../../../pretrained_models/CosyVoice2-0.5B',
                         help='local path or modelscope repo id')

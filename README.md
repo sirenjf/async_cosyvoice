@@ -99,6 +99,6 @@ python server.py --load_jit --load_trt --fp16
 
 
 ## 注意事项
-1. 本项目使用的是 vllm 最新版本，并开启了 `VLLM_USE_V1 = '1'`。
+1. 本项目使用的是 vllm == 0.7.3，并开启了 `VLLM_USE_V1 = '1'`。
 2. 当前 CUDA 环境为 12.4，部分依赖文件使用的版本为 `vllm==0.7.3`、`torch==2.5.1`、`onnxruntime-gpu==1.19.0`。
 3. 启动 cosyvoice2 实例后，需要进行 **预热**，即进行 10 次以上的推理任务，预热 trt 模型。

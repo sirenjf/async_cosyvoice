@@ -172,18 +172,21 @@ def multiprocess_main(args):
     with open(args.input_file, 'r') as f:
         for line in f:
             all_text.append(line.strip())
-    
+
+    start_time = time.monotonic()
+    os.makedirs(args.output_path, exist_ok=True)
     with ProcessPoolExecutor(max_workers=max_conc) as executor:
         requests = []
         for i, text in enumerate(all_text):
             clone_args = Namespace(**args.__dict__)
             clone_args.tts_text = text
-            clone_args.output_path = f"{args.output_path}_{i}.wav"
+            clone_args.output_path = f"{args.output_path}/{i}.wav"
             requests.append(clone_args)
             
         futures = [executor.submit(run_async_main, request) for request in requests]
         for future in as_completed(futures):
             future.result()
+    logging.info(f"Total time: {time.monotonic() - start_time:.2f}s")
 
 async def register_spk(args):
     async with aio.insecure_channel(f"{args.host}:{args.port}") as channel:
@@ -229,3 +232,4 @@ if __name__ == "__main__":
             asyncio.run(main(args))
 
     # python client.py --mode zero_shot_by_spk_id --spk_id 001 --stream_input --tts_text 你好，请问有什么可以帮您的吗？ --format "" --stream
+    # python client.py --mode zero_shot_by_spk_id --spk_id 001 --input_file text.txt --max_conc 10 --output_path output
