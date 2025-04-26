@@ -7,7 +7,7 @@ import uuid
 import base64
 import logging
 import argparse
-from typing import Optional, Literal, Type, AsyncIterator
+from typing import Optional, Literal, Type, AsyncGenerator, Any
 
 import torch
 import torchaudio
@@ -41,10 +41,6 @@ app.add_middleware(
     allow_headers=["*"],     # 允许所有请求头
 )
 
-# 定义支持的响应格式
-# ResponseFormatType = Literal["mp3", "opus", "wav", "pcm"]
-ResponseFormatType: Type[str] = Literal["mp3", "wav"]
-
 class VoiceUploadResponse(BaseModel):
     """音频上传响应参数"""
     uri: str = Field(...,
@@ -67,9 +63,9 @@ class SpeechRequest(BaseModel):
         ],
         description="音色选择"
     )
-    response_format: Optional[Literal["mp3", "wav"]] = Field(
+    response_format: Optional[Literal["mp3", "wav", "pcm"]] = Field(
         "mp3",
-        examples=["mp3", "wav"],
+        examples=["mp3", "wav", "pcm"],
         description="输出音频格式"
     )
     sample_rate: Optional[int] = Field(
@@ -100,7 +96,11 @@ def save_voice_data(customName: str, audio_data: bytes, text: str) -> str:
     )
     return uri
 
-async def generate_audio_content(request: SpeechRequest) -> AsyncIterator[bytes]:
+async def generator_wrapper(audio_data_generator: AsyncGenerator[dict, None]) -> AsyncGenerator[torch.Tensor, None]:
+    async for chunk in audio_data_generator:
+        yield chunk["tts_speech"]
+
+async def generate_audio_content(request: SpeechRequest) -> AsyncGenerator[bytes, Any] | None:
     """生成音频内容（示例实现）"""
     tts_text = request.input
     spk_id = request.voice
@@ -111,29 +111,30 @@ async def generate_audio_content(request: SpeechRequest) -> AsyncIterator[bytes]
             instruct_text = tts_text[: end_of_prompt_index + len("<|endofprompt|>")]
             tts_text = tts_text[end_of_prompt_index + len("<|endofprompt|>") :]
 
-            generator = cosyvoice.inference_instruct2_by_spk_id(
+            audio_tensor_data_generator = generator_wrapper(cosyvoice.inference_instruct2_by_spk_id(
                 tts_text,
                 instruct_text,
                 spk_id,
                 stream=request.stream,
                 speed=request.speed,
                 text_frontend=True,
-            )
+            ))
         else:
-            generator = cosyvoice.inference_zero_shot_by_spk_id(
+            audio_tensor_data_generator = generator_wrapper(cosyvoice.inference_zero_shot_by_spk_id(
                 tts_text,
                 spk_id,
                 stream=request.stream,
                 speed=request.speed,
                 text_frontend=True,
-            )
+            ))
 
-        async for chunk in generator:
-            yield convert_audio_tensor_to_bytes(
-                tensor=chunk["tts_speech"],
-                format=request.response_format,
-                sample_rate=request.sample_rate,
-            )
+        audio_bytes_data_generator = convert_audio_tensor_to_bytes(
+            audio_tensor_data_generator,
+            request.response_format,
+            sample_rate=request.sample_rate,
+            stream=request.stream,
+        )
+        return audio_bytes_data_generator
     except Exception as e:
         logging.error(f"Processing failed: {str(e)}", exc_info=True)
 
@@ -160,7 +161,7 @@ async def text_to_speech(request: SpeechRequest):
 
         # 返回流式响应
         return StreamingResponse(
-            content=generate_audio_content(request),
+            content=await generate_audio_content(request),
             media_type=content_type,
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
