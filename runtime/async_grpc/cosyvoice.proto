@@ -15,6 +15,8 @@ message Request {
   bool stream = 3;          // 流式输出控制
   float speed = 4;          // 速度控制
   string format = 5;        // 输出音频格式
+  bool save = 12;           // 是否保存到supabase storage
+  string save_path = 13;    // 自定义保存路径，不包含扩展名
 
   // 模式参数 (第一次请求时必需，后续流请求可省略)
   oneof request_type {
@@ -55,8 +57,9 @@ message instruct2BySpkIdRequest {
 }
 
 message Response {
-  bytes tts_audio = 1;
-  string format = 2;
+  bytes tts_audio = 1;      // 合成的音频数据
+  string format = 2;        // 音频格式（值为"url"时，tts_audio字段包含URL字符串）
+  string file_path = 3;     // Supabase存储的文件路径（当save=true时返回）
 }
 
 message RegisterSpkRequest {

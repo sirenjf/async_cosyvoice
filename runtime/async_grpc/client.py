@@ -60,8 +60,10 @@ def construct_request(args, tts_text):
     request.stream = args.stream
     request.speed = args.speed
     request.text_frontend = args.text_frontend
-
     request.format = args.format
+    request.save = args.save
+    if hasattr(args, 'save_path') and args.save_path:
+        request.save_path = args.save_path
 
     # 构造请求
     if args.mode == 'sft':
@@ -107,8 +109,10 @@ async def main(args):
             last_time = start_time
             chunk_index = 0
             tts_audio = b''
+            remote_path = None
+
             if args.stream_input:
-                
+
                 def text_generator(args):
                     yield construct_request(args, "")
                     for i,segment in enumerate(args.tts_text):
@@ -128,15 +132,19 @@ async def main(args):
                 response_stream = stub.Inference(request)
 
             async for response in response_stream:
-                tts_audio += response.tts_audio
-                logging.info(f'Received audio chunk {len(response.tts_audio)} bytes, chunk index: {chunk_index},' +
-                             f'cost {time.time() - last_time:.3f}s  all cost {time.time() - start_time:.3f}s ')
-
-                last_time = time.time()
-                chunk_index += 1
+                if response.file_path:
+                    # 这是Supabase存储路径
+                    remote_path = response.file_path
+                    logging.info(f'Audio saved to Supabase path: {remote_path}')
+                else:
+                    tts_audio += response.tts_audio
+                    logging.info(f'Received audio chunk {len(response.tts_audio)} bytes, chunk index: {chunk_index},' +
+                                f'cost {time.time() - last_time:.3f}s  all cost {time.time() - start_time:.3f}s ')
+                    last_time = time.time()
+                    chunk_index += 1
 
             # 音频后处理
-            if args.format is None or args.format in {'', 'pcm'}:
+            if tts_audio and (args.format is None or args.format in {'', 'pcm'}):
                 tts_array = convert_audio_bytes_to_ndarray(tts_audio, args.format)
                 # 保存为 (samples, 1) 格式
 
@@ -149,7 +157,7 @@ async def main(args):
                 all_time = time.time() - start_time
                 logging.info(f'Audio saved to {args.output_path} (duration: {duration:.2f}s) '+
                              f'cost {time.time() - last_time:.3f}s  all cost {all_time:.3f}s, rtf: {all_time / duration:.3f}')
-            else:
+            elif args.format not in {None, '', 'pcm'}:
                 logging.error(f"Unsupported format: {args.format}")
 
         except grpc.RpcError as e:
@@ -167,7 +175,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 def multiprocess_main(args):
     max_conc = args.max_conc
-    
+
     all_text = []
     with open(args.input_file, 'r') as f:
         for line in f:
@@ -183,7 +191,7 @@ def multiprocess_main(args):
             clone_args.tts_text = text
             clone_args.output_path = f"{args.output_path}/{i}.wav"
             requests.append(clone_args)
-            
+
         futures = [executor.submit(run_async_main, request) for request in requests]
         for future in as_completed(futures):
             future.result()
@@ -209,6 +217,8 @@ if __name__ == "__main__":
                         help='Request mode')
     parser.add_argument('--stream_input', action="store_true", help="是否流式输入，用于双工流式")
     parser.add_argument('--stream', action='store_true', help='是否流式输出')
+    parser.add_argument('--save', action='store_true', help='是否保存到Supabase storage（仅非流式模式有效）')
+    parser.add_argument('--save_path', type=str, default='', help='自定义保存路径，不包含扩展名（如：my_audio）')
     parser.add_argument('--speed', type=float, default=1.0, help='Speed up the audio')
     parser.add_argument('--text_frontend', type=bool, default=True, help='Text frontend mode')
     parser.add_argument('--tts_text', type=str, default='你好，我是通义千问语音合成大模型，请问有什么可以帮您的吗？')

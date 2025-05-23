@@ -18,8 +18,8 @@ import asyncio
 from concurrent import futures
 import argparse
 from typing import AsyncGenerator, Callable, Tuple, AsyncIterator, Union
-
-import torch
+import uuid
+from supabase import create_client
 
 import cosyvoice_pb2
 import cosyvoice_pb2_grpc
@@ -27,6 +27,7 @@ import logging
 import grpc
 from grpc import aio
 import torchaudio
+import torch
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f'{ROOT_DIR}/../../..')
@@ -37,6 +38,10 @@ from async_cosyvoice.runtime.async_grpc.utils import convert_audio_tensor_to_byt
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s %(levelname)s %(message)s')
 
+# Supabase配置
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "")
 
 class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     def __init__(self, args):
@@ -46,6 +51,22 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
         except Exception as e:
             print('no valid model_type! just support AsyncCosyVoice2.')
             raise e
+
+        # 初始化Supabase客户端
+        if SUPABASE_URL and SUPABASE_KEY:
+            self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            logging.info('Supabase client initialized')
+            # 确保存储桶存在
+            try:
+                self.supabase.storage.get_bucket(SUPABASE_BUCKET)
+                logging.info(f"Storage bucket '{SUPABASE_BUCKET}' exists")
+            except:
+                self.supabase.storage.create_bucket(SUPABASE_BUCKET)
+                logging.info(f"Created storage bucket '{SUPABASE_BUCKET}'")
+        else:
+            self.supabase = None
+            logging.warning('Supabase environment variables not set, save functionality disabled')
+
         logging.info('grpc service initialized')
 
     async def RegisterSpk(self, request: cosyvoice_pb2.RegisterSpkRequest, context: aio.ServicerContext) -> cosyvoice_pb2.RegisterSpkResponse:
@@ -202,10 +223,33 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                     yield cosyvoice_pb2.Response(tts_audio=audio_bytes, format=request.format)
             # TODO: 需要在第一帧添加文件头信息，后续的帧直接返回音频数据
             # 在保存音频时，以便使用追加模式写入同一个文件，同时可以使用支持流式播放的音频播放器进行播放。
-
+        elif request.save:
+            # 处理保存模式但不流式返回的情况
+            all_audio_tensors = []
+            
+            # 只收集所有音频数据，不返回每一帧
+            async for model_chunk in processor(*processor_args):
+                # 收集原始tensor数据而不是编码后的字节数据
+                all_audio_tensors.append(model_chunk['tts_speech'])
+            
+            # 拼接所有音频tensor并编码为完整音频文件
+            if all_audio_tensors:
+                # 拼接所有音频tensor
+                complete_audio = torch.cat(all_audio_tensors, dim=-1)
+                
+                # 转换为完整音频文件的字节数据
+                audio_bytes = await asyncio.to_thread(
+                    convert_audio_tensor_to_bytes,
+                    complete_audio,
+                    request.format if request.format else "wav"
+                )
+                
+                logging.info(f"Saving audio to Supabase, audio size: {len(audio_bytes)} bytes")
+                file_path = await self._save_to_supabase(audio_bytes, request.format if request.format else "wav", request.save_path)
+                if file_path:
+                    yield cosyvoice_pb2.Response(file_path=file_path, format=request.format)
         else:
             # 服务端合并音频数据后，再编码返回一个完整的音频文件
-            audio_data: torch.Tensor = None
             async for model_chunk in processor(*processor_args):
                 audio_bytes = await asyncio.to_thread(
                     convert_audio_tensor_to_bytes,
@@ -213,6 +257,32 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
                 )
                 yield cosyvoice_pb2.Response(tts_audio=audio_bytes, format=request.format)
 
+    async def _save_to_supabase(self, audio_data: bytes, format: str, save_path: str):
+        """保存音频数据到Supabase存储，返回文件路径"""
+        if not self.supabase:
+            logging.warning("Supabase client not initialized, skipping save")
+            return None
+
+        try:
+            # 生成文件路径 - 如果有save_path就使用它，否则使用UUID
+            if save_path:
+                file_path = f"speech/{save_path}.{format if format else 'wav'}"
+            else:
+                file_id = str(uuid.uuid4())
+                file_path = f"speech/{file_id}.{format if format else 'wav'}"
+
+            # 上传到Supabase - 直接使用字节数据
+            result = self.supabase.storage.from_(SUPABASE_BUCKET).upload(
+                file_path,
+                audio_data,
+                {"contentType": f"audio/{format if format else 'wav'}"}
+            )
+
+            logging.info(f"Audio saved to Supabase: {file_path}")
+            return file_path
+        except Exception as e:
+            logging.error(f"Failed to save audio to Supabase: {str(e)}")
+            return None
 
 async def serve(args):
     options = [
